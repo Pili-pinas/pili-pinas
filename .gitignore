@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data (raw + processed — can be large; regenerate from scrapers)
+backend/data/raw/
+backend/data/processed/
+backend/data/metadata.json
+
+# Vector DB — regenerate from embeddings pipeline
+backend/vector_db/
+
+# Logs
+*.log
+logs/
+
+# macOS
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb

@@ -1,0 +1,36 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - LLM_BACKEND=${LLM_BACKEND:-ollama}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-haiku-4-5-20251001}
+    volumes:
+      - ./backend/data:/app/data
+      - ./backend/vector_db:/app/vector_db
+    networks:
+      - pili_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - PILI_PINAS_API_URL=http://backend:8000
+    depends_on:
+      - backend
+    networks:
+      - pili_net
+
+networks:
+  pili_net:
+    driver: bridge
