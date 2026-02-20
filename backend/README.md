@@ -5,7 +5,7 @@ FastAPI + LangChain + ChromaDB RAG pipeline.
 ## Setup
 
 ```bash
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 cp ../.env.example ../.env
 # Edit .env if needed (default: Ollama + llama3.2)
 ```

@@ -10,13 +10,17 @@ Pili-Pinas uses a RAG (Retrieval-Augmented Generation) pipeline to summarize pol
 
 ### Prerequisites
 - Python 3.11+
-- [Ollama](https://ollama.com) with `llama3.2` pulled (`ollama pull llama3.2`)
+- [uv](https://docs.astral.sh/uv/) (`pip install uv` or `brew install uv`)
+- Anthropic API key (set `ANTHROPIC_API_KEY` in `.env`)
 
 ### Setup
 
 ```bash
+cp .env.example .env
+# Add your ANTHROPIC_API_KEY to .env
+
 # Install backend deps
-pip install -r backend/requirements.txt
+uv pip install -r backend/requirements.txt
 
 # Scrape and ingest documents
 python backend/src/data_ingestion/ingestion.py
@@ -40,7 +44,7 @@ User query
   → Streamlit UI
   → FastAPI /query endpoint
   → ChromaDB similarity search (top-k chunks)
-  → Ollama / Claude Haiku (LLM)
+  → Claude Haiku (LLM)
   → Answer with source citations
 ```
 

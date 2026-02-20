@@ -5,7 +5,7 @@ Streamlit UI for the Pili-Pinas voter information tool.
 ## Setup
 
 ```bash
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
 ## Run

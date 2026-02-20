@@ -139,7 +139,7 @@ Every ingested document must include:
 
 ```bash
 # Install dependencies
-pip install -r backend/requirements.txt
+uv pip install -r backend/requirements.txt
 
 # Run backend API
 uvicorn src.api.main:app --reload
