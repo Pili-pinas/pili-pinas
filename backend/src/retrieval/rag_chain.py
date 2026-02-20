@@ -5,7 +5,7 @@ Retrieval flow:
 1. Embed user query with the multilingual sentence-transformer
 2. Retrieve top-k similar chunks from ChromaDB
 3. Build prompt with retrieved context
-4. Call LLM (Ollama locally, Claude Haiku in production)
+4. Call Claude Haiku via the Anthropic API
 5. Return answer with source citations
 
 Usage:
@@ -31,9 +31,6 @@ logger = logging.getLogger(__name__)
 EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_TOP_K = 5
 
-# LLM backend: "ollama" (dev) or "claude" (prod)
-LLM_BACKEND = os.getenv("LLM_BACKEND", "ollama")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 
 
@@ -111,24 +108,7 @@ class PiliPinasRAG:
         return "\n\n---\n\n".join(parts)
 
     def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
-        """Route to the configured LLM backend."""
-        if LLM_BACKEND == "claude":
-            return self._call_claude(system_prompt, user_prompt)
-        return self._call_ollama(system_prompt, user_prompt)
-
-    def _call_ollama(self, system_prompt: str, user_prompt: str) -> str:
-        """Call local Ollama instance."""
-        try:
-            from langchain_ollama import OllamaLLM
-            llm = OllamaLLM(model=OLLAMA_MODEL)
-            full_prompt = f"{system_prompt}\n\n{user_prompt}"
-            return llm.invoke(full_prompt)
-        except Exception as e:
-            logger.error(f"Ollama call failed: {e}")
-            return f"Error: Could not reach Ollama. Make sure it's running with `ollama serve`. ({e})"
-
-    def _call_claude(self, system_prompt: str, user_prompt: str) -> str:
-        """Call Claude API (production)."""
+        """Call Claude Haiku via the Anthropic API."""
         try:
             import anthropic
             client = anthropic.Anthropic()

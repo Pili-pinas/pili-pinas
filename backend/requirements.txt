@@ -2,7 +2,9 @@
 langchain==0.3.14
 langchain-community==0.3.14
 langchain-chroma==0.2.0
-langchain-ollama==0.2.3
+
+# LLM
+anthropic==0.45.0
 
 # Vector DB
 chromadb==0.6.3
