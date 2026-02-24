@@ -1,0 +1,35 @@
+# fly.toml — Pili-Pinas API
+# Deploy: fly deploy
+# Docs: https://fly.io/docs/reference/configuration/
+
+app = "pili-pinas-api"
+primary_region = "sin"  # Singapore — closest to Philippines
+
+[build]
+  dockerfile = "backend/Dockerfile"
+
+# Persistent volume for ChromaDB data
+[mounts]
+  source = "vector_db"
+  destination = "/app/vector_db"
+
+[env]
+  VECTOR_STORE_BACKEND = "chroma"
+  # Set secrets via: fly secrets set ANTHROPIC_API_KEY=sk-...
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 25
+    soft_limit = 20
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1

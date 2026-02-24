@@ -98,6 +98,42 @@ User query
 
 ---
 
+## Deploying to Fly.io
+
+### One-time setup
+```bash
+# Install flyctl
+brew install flyctl        # macOS
+# or: curl -L https://fly.io/install.sh | sh
+
+fly auth login
+fly launch --no-deploy     # creates the app, skips first deploy
+
+# Create the persistent volume for ChromaDB (3 GB, Singapore region)
+fly volumes create vector_db --region sin --size 3
+
+# Set your Anthropic key as a secret
+fly secrets set ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### Deploy
+```bash
+fly deploy
+```
+
+### Useful commands
+```bash
+fly logs              # tail live logs
+fly status            # machine health
+fly ssh console       # SSH into the container
+fly volumes list      # check volume usage
+```
+
+> **Region**: `sin` (Singapore) is the closest Fly region to the Philippines.
+> Change in `fly.toml` if you prefer a different region.
+
+---
+
 ## Implementation Phases
 
 | Phase | Goal | Status |
