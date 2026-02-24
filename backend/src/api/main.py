@@ -23,17 +23,76 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from retrieval.rag_chain import get_rag
-from embeddings.vector_store import get_chroma_client, get_or_create_collection
+from embeddings.vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
 
+
+# ── OpenAPI metadata ──────────────────────────────────────────────────────────
+
+_DESCRIPTION = """
+**Pili-Pinas** helps Filipino voters make informed decisions using a
+RAG (Retrieval-Augmented Generation) pipeline over Philippine government
+documents, laws, and news articles.
+
+## How it works
+
+1. Ask a question in **English, Filipino, or Taglish**
+2. The API retrieves the most relevant document chunks from its vector database
+3. Claude Haiku generates a cited answer grounded in those documents
+
+## Data sources
+
+| Source | Type |
+|--------|------|
+| senate.gov.ph | Bills, resolutions, senator profiles |
+| congress.gov.ph | House bills, member profiles |
+| officialgazette.gov.ph | Laws, executive orders |
+| comelec.gov.ph | Candidates, election results |
+| Rappler, Inquirer, PhilStar, GMA | News articles |
+
+## Scraping
+
+Use the `/scrape` endpoint to refresh the document database on demand.
+Jobs run in the background — poll `/scrape/{job_id}` for status.
+"""
+
+_TAGS_METADATA = [
+    {
+        "name": "query",
+        "description": "Ask questions about Philippine politicians, laws, and government records.",
+    },
+    {
+        "name": "scraping",
+        "description": (
+            "Trigger and monitor on-demand data ingestion jobs. "
+            "Jobs run asynchronously — start with **POST /scrape**, "
+            "then poll **GET /scrape/{job_id}**."
+        ),
+    },
+    {
+        "name": "system",
+        "description": "Health check and database statistics.",
+    },
+]
+
 app = FastAPI(
     title="Pili-Pinas API",
-    description="AI-powered Philippine voter information tool",
+    description=_DESCRIPTION,
     version="0.1.0",
+    contact={
+        "name": "Pili-Pinas",
+        "url": "https://github.com/your-repo/pili-pinas",
+    },
+    license_info={
+        "name": "MIT",
+    },
+    openapi_tags=_TAGS_METADATA,
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
 app.add_middleware(
@@ -57,87 +116,264 @@ VALID_SOURCES = [
 # ── Request / Response models ───────────────────────────────────────────────
 
 class QueryRequest(BaseModel):
-    question: str = Field(..., min_length=3, max_length=1000, description="User's question")
+    model_config = ConfigDict(json_schema_extra={
+        "examples": [
+            {
+                "summary": "Education bills",
+                "value": {
+                    "question": "What education bills has the Senate passed this year?",
+                    "source_type": "bill",
+                    "top_k": 5,
+                },
+            },
+            {
+                "summary": "Politician profile (Filipino)",
+                "value": {
+                    "question": "Sino si Leni Robredo at ano ang kanyang mga nagawa?",
+                    "top_k": 5,
+                },
+            },
+            {
+                "summary": "SALN / financial disclosure",
+                "value": {
+                    "question": "What assets did Senator Marcos declare in his SALN?",
+                    "source_type": "saln",
+                    "top_k": 3,
+                },
+            },
+        ]
+    })
+
+    question: str = Field(
+        ...,
+        min_length=3,
+        max_length=1000,
+        description="Question in English, Filipino, or Taglish.",
+    )
     source_type: str | None = Field(
         None,
-        description="Optional filter: bill | law | news | profile | saln | election"
+        description=(
+            "Filter results to a specific document type. "
+            "Options: `bill`, `law`, `news`, `profile`, `saln`, `election`. "
+            "Omit to search across all types."
+        ),
     )
-    top_k: int = Field(5, ge=1, le=20, description="Number of chunks to retrieve")
+    top_k: int = Field(
+        5,
+        ge=1,
+        le=20,
+        description="Number of document chunks to retrieve before generating the answer.",
+    )
 
 
 class SourceDoc(BaseModel):
-    title: str
-    url: str
-    source: str
-    date: str
-    score: float
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "title": "Senate Bill No. 2765 — Basic Education Funding Act",
+            "url": "https://senate.gov.ph/lis/bill_res.aspx?congress=19&q=SB02765",
+            "source": "senate.gov.ph",
+            "date": "2025-01-10",
+            "score": 0.923,
+        }
+    })
+
+    title: str = Field(description="Document title.")
+    url: str = Field(description="Source URL — voters can verify the claim here.")
+    source: str = Field(description="Domain of the source (e.g. senate.gov.ph).")
+    date: str = Field(description="Publication date (YYYY-MM-DD).")
+    score: float = Field(description="Similarity score (0–1). Higher = more relevant.")
 
 
 class QueryResponse(BaseModel):
-    answer: str
-    sources: list[SourceDoc]
-    query: str
-    chunks_used: int
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "answer": (
+                "The Senate passed the Basic Education Funding Act (SB 2765) on January 10, 2025, "
+                "increasing per-pupil spending by 30% [senate.gov.ph]."
+            ),
+            "sources": [{
+                "title": "Senate Bill No. 2765 — Basic Education Funding Act",
+                "url": "https://senate.gov.ph/lis/bill_res.aspx?congress=19&q=SB02765",
+                "source": "senate.gov.ph",
+                "date": "2025-01-10",
+                "score": 0.923,
+            }],
+            "query": "What education bills has the Senate passed this year?",
+            "chunks_used": 1,
+        }
+    })
+
+    answer: str = Field(description="AI-generated answer with inline source citations.")
+    sources: list[SourceDoc] = Field(description="Documents used to generate the answer.")
+    query: str = Field(description="The original question.")
+    chunks_used: int = Field(description="Number of document chunks passed to the LLM.")
 
 
 class ScrapeRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={
+        "examples": [
+            {
+                "summary": "News only (fast)",
+                "value": {
+                    "sources": ["news"],
+                    "max_news": 20,
+                    "embed": True,
+                },
+            },
+            {
+                "summary": "Senate bills + senators",
+                "value": {
+                    "sources": ["senate_bills", "senators"],
+                    "congress": 19,
+                    "max_pages": 3,
+                    "embed": True,
+                },
+            },
+            {
+                "summary": "Full scrape (slow)",
+                "value": {
+                    "sources": None,
+                    "congress": 19,
+                    "max_pages": 5,
+                    "max_news": 50,
+                    "embed": True,
+                },
+            },
+        ]
+    })
+
     sources: list[str] | None = Field(
         None,
         description=(
-            "Sources to scrape. None = all. "
-            "Options: senate_bills, senators, gazette, "
-            "house_bills, house_members, comelec, news"
+            "Data sources to scrape. `null` scrapes all sources. "
+            "Valid values: `senate_bills`, `senators`, `gazette`, "
+            "`house_bills`, `house_members`, `comelec`, `news`."
         ),
     )
-    congress: int = Field(19, ge=17, le=25, description="Congress number for bill scrapers")
-    max_pages: int = Field(3, ge=1, le=20, description="Max pages to scrape per source")
-    max_news: int = Field(20, ge=1, le=200, description="Max articles per news source")
-    embed: bool = Field(True, description="Auto-run embedding pipeline after ingestion")
+    congress: int = Field(
+        19,
+        ge=17,
+        le=25,
+        description="Philippine Congress number to use for bill scrapers (e.g. 19 = 19th Congress).",
+    )
+    max_pages: int = Field(
+        3,
+        ge=1,
+        le=20,
+        description="Maximum pages to scrape per government source.",
+    )
+    max_news: int = Field(
+        20,
+        ge=1,
+        le=200,
+        description="Maximum articles to fetch per news source.",
+    )
+    embed: bool = Field(
+        True,
+        description=(
+            "If `true`, automatically runs the embedding pipeline after ingestion "
+            "so new documents are immediately searchable."
+        ),
+    )
 
 
 class ScrapeJobStatus(BaseModel):
-    job_id: str
-    status: str  # pending | running | done | failed
-    started_at: str | None = None
-    finished_at: str | None = None
-    stats: dict | None = None
-    error: str | None = None
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "job_id": "a3f1c2d4-1234-5678-abcd-ef0123456789",
+            "status": "done",
+            "started_at": "2025-01-15T10:00:00.000000",
+            "finished_at": "2025-01-15T10:04:32.123456",
+            "stats": {
+                "ingestion": {
+                    "sources": ["news"],
+                    "counts": {"news_articles": 87},
+                    "total_chunks": 87,
+                },
+                "embedding": {"news_articles": 87},
+            },
+            "error": None,
+        }
+    })
+
+    job_id: str = Field(description="Unique job identifier.")
+    status: str = Field(description="Job state: `pending` → `running` → `done` | `failed`.")
+    started_at: str | None = Field(None, description="ISO timestamp when the job started.")
+    finished_at: str | None = Field(None, description="ISO timestamp when the job finished.")
+    stats: dict | None = Field(None, description="Ingestion and embedding counts, populated on completion.")
+    error: str | None = Field(None, description="Error message if status is `failed`.")
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
-@app.get("/health")
+@app.get(
+    "/health",
+    tags=["system"],
+    summary="Health check",
+    response_description="Service is up and running.",
+)
 def health():
-    """Health check endpoint."""
+    """Returns `200 OK` when the API is reachable. Use this for liveness probes."""
     return {"status": "ok", "service": "pili-pinas-api"}
 
 
-@app.get("/stats")
+@app.get(
+    "/stats",
+    tags=["system"],
+    summary="Vector database statistics",
+    response_description="ChromaDB collection name and total chunk count.",
+    responses={
+        500: {"description": "Could not connect to ChromaDB."},
+    },
+)
 def stats():
-    """Return ChromaDB collection statistics."""
+    """
+    Returns the number of document chunks currently stored in ChromaDB.
+
+    Run **POST /scrape** to ingest more documents and increase this count.
+    """
     try:
-        client = get_chroma_client()
-        collection = get_or_create_collection(client)
-        count = collection.count()
+        store = get_vector_store()
         return {
-            "collection": collection.name,
-            "total_chunks": count,
+            "collection": store.name,
+            "total_chunks": store.count(),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not fetch stats: {e}")
 
 
-@app.post("/query", response_model=QueryResponse)
+@app.post(
+    "/query",
+    tags=["query"],
+    summary="Ask a question about Philippine politics",
+    response_model=QueryResponse,
+    response_description="AI-generated answer with cited sources.",
+    responses={
+        422: {"description": "Validation error — question too short or invalid field."},
+        500: {"description": "RAG pipeline error."},
+    },
+)
 def query(req: QueryRequest):
     """
-    Main RAG endpoint.
+    **Main endpoint.** Ask anything about Philippine politicians, laws, or government records.
 
-    Takes a question and returns an AI-generated answer with source citations
-    drawn from Philippine government documents and news articles.
+    ### How it works
+    1. Your question is embedded and compared against the vector database
+    2. The top-`top_k` most relevant document chunks are retrieved
+    3. Claude Haiku generates a factual answer citing those documents
+    4. If no relevant documents are found, the API says so — it does **not** hallucinate
+
+    ### Language support
+    Questions can be in **English**, **Filipino**, or **Taglish**. The multilingual
+    embedding model (`paraphrase-multilingual-MiniLM-L12-v2`) handles all three.
+
+    ### Tips
+    - Use `source_type` to narrow results (e.g. `"news"` for recent coverage,
+      `"bill"` for legislation)
+    - Increase `top_k` for complex questions that span multiple documents
     """
     try:
         rag = get_rag()
-        # Override top_k if specified
         rag.top_k = req.top_k
 
         result = rag.query(
@@ -186,13 +422,57 @@ def _run_scrape_job(job_id: str, req: ScrapeRequest) -> None:
         _jobs[job_id]["finished_at"] = datetime.now().isoformat()
 
 
-@app.post("/scrape", status_code=202)
+@app.post(
+    "/scrape",
+    tags=["scraping"],
+    summary="Start a data ingestion job",
+    status_code=202,
+    response_description="Job accepted. Use the returned `job_id` to poll for status.",
+    responses={
+        202: {
+            "description": "Job queued successfully.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "job_id": "a3f1c2d4-1234-5678-abcd-ef0123456789",
+                        "status": "pending",
+                    }
+                }
+            },
+        },
+        422: {"description": "Invalid source name supplied."},
+    },
+)
 def trigger_scrape(req: ScrapeRequest, background_tasks: BackgroundTasks):
     """
-    Start an on-demand scrape (and optionally embed) job.
+    **Starts a background scraping + embedding job** and returns immediately with a `job_id`.
 
-    Returns immediately with a job_id. Poll GET /scrape/{job_id} for status.
-    Sources: senate_bills | senators | gazette | house_bills | house_members | comelec | news
+    ### Workflow
+    ```
+    POST /scrape  →  { job_id: "abc..." }
+         ↓  (poll every few seconds)
+    GET  /scrape/abc...  →  { status: "running" }
+         ↓
+    GET  /scrape/abc...  →  { status: "done", stats: { ... } }
+    ```
+
+    ### Source options
+    | Value | What is scraped |
+    |-------|----------------|
+    | `senate_bills` | Bills and resolutions from senate.gov.ph |
+    | `senators` | Senator profile pages |
+    | `gazette` | Laws and EOs from officialgazette.gov.ph |
+    | `house_bills` | House bills from congress.gov.ph |
+    | `house_members` | House representative profiles |
+    | `comelec` | 2025 candidate list from comelec.gov.ph |
+    | `news` | RSS feeds from Rappler, Inquirer, PhilStar, MB, GMA |
+
+    Omit `sources` (or set to `null`) to scrape **all** sources.
+
+    ### Notes
+    - Scraping respects a 1.5 s delay between requests (robots.txt etiquette)
+    - Set `embed: false` to ingest documents without rebuilding embeddings
+    - Jobs are stored in memory — they reset on server restart
     """
     if req.sources:
         invalid = [s for s in req.sources if s not in VALID_SOURCES]
@@ -215,9 +495,29 @@ def trigger_scrape(req: ScrapeRequest, background_tasks: BackgroundTasks):
     return {"job_id": job_id, "status": "pending"}
 
 
-@app.get("/scrape/{job_id}", response_model=ScrapeJobStatus)
+@app.get(
+    "/scrape/{job_id}",
+    tags=["scraping"],
+    summary="Poll a scrape job's status",
+    response_model=ScrapeJobStatus,
+    response_description="Current state of the scrape job.",
+    responses={
+        200: {"description": "Job found — check `status` field for current state."},
+        404: {"description": "No job found with this ID."},
+    },
+)
 def scrape_status(job_id: str):
-    """Check the status of a scrape job by its job_id."""
+    """
+    Returns the current state of a scrape job started by **POST /scrape**.
+
+    ### Status values
+    | Status | Meaning |
+    |--------|---------|
+    | `pending` | Job is queued, not yet started |
+    | `running` | Scraping / embedding in progress |
+    | `done` | Completed successfully — `stats` is populated |
+    | `failed` | An error occurred — `error` contains the message |
+    """
     job = _jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")

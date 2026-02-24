@@ -23,7 +23,8 @@ from typing import Optional
 
 from sentence_transformers import SentenceTransformer
 
-from embeddings.vector_store import get_chroma_client, get_or_create_collection, query_collection
+from embeddings.base import VectorStore
+from embeddings.vector_store import get_vector_store
 from retrieval.prompts import RAG_SYSTEM_PROMPT, RAG_USER_PROMPT_TEMPLATE, NO_CONTEXT_RESPONSE
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ class PiliPinasRAG:
     def __init__(self, top_k: int = DEFAULT_TOP_K):
         self.top_k = top_k
         self._embedding_model: Optional[SentenceTransformer] = None
-        self._collection = None
+        self._store: Optional[VectorStore] = None
 
     def _get_embedding_model(self) -> SentenceTransformer:
         if self._embedding_model is None:
@@ -56,11 +57,10 @@ class PiliPinasRAG:
             self._embedding_model = SentenceTransformer(EMBEDDING_MODEL)
         return self._embedding_model
 
-    def _get_collection(self):
-        if self._collection is None:
-            client = get_chroma_client()
-            self._collection = get_or_create_collection(client)
-        return self._collection
+    def _get_store(self) -> VectorStore:
+        if self._store is None:
+            self._store = get_vector_store()
+        return self._store
 
     def retrieve(self, question: str, source_type: Optional[str] = None) -> list[dict]:
         """
@@ -77,8 +77,7 @@ class PiliPinasRAG:
         query_embedding = model.encode([question], normalize_embeddings=True).tolist()
 
         where = {"source_type": source_type} if source_type else None
-        results = query_collection(
-            collection=self._get_collection(),
+        results = self._get_store().query(
             query_embeddings=query_embedding,
             n_results=self.top_k,
             where=where,

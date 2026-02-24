@@ -20,13 +20,12 @@ Help Filipino voters make informed decisions by providing AI-generated summaries
 |Layer      |Tool                                                       |
 |-----------|-----------------------------------------------------------|
 |Framework  |LangChain                                                  |
-|Vector DB  |ChromaDB                                                   |
+|Vector DB  |ChromaDB (default, swappable — see Vector Store below)     |
 |Embeddings |sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2|
-|LLM (dev)  |Ollama + Llama 3.2 (free, local)                           |
-|LLM (prod) |Claude Haiku or GPT-4o-mini                                |
+|LLM        |Claude Haiku (`claude-haiku-4-5-20251001`) via Anthropic SDK|
 |Backend API|FastAPI                                                    |
 |Frontend   |Streamlit                                                  |
-|Language   |Python                                                     |
+|Language   |Python 3.11+                                               |
 
 -----
 
@@ -48,8 +47,9 @@ pili-pinas/
 │   │   │   │   └── html_processor.py
 │   │   │   └── ingestion.py
 │   │   ├── embeddings/
+│   │   │   ├── base.py              # VectorStore ABC
 │   │   │   ├── create_embeddings.py
-│   │   │   └── vector_store.py
+│   │   │   └── vector_store.py      # ChromaVectorStore + get_vector_store() factory
 │   │   ├── retrieval/
 │   │   │   ├── rag_chain.py
 │   │   │   └── prompts.py
@@ -156,12 +156,38 @@ python backend/src/embeddings/create_embeddings.py
 
 -----
 
+## Vector Store Abstraction
+
+The vector store is swappable via the `VECTOR_STORE_BACKEND` env var (default: `"chroma"`).
+
+```
+embeddings/base.py          ← VectorStore ABC (interface)
+embeddings/vector_store.py  ← ChromaVectorStore impl + get_vector_store() factory
+```
+
+**To add a new backend (e.g. Turso, Pinecone):**
+1. Subclass `VectorStore` from `embeddings.base`
+2. Implement `name`, `upsert()`, `query()`, `count()`
+3. Register it in `get_vector_store()` in `vector_store.py`
+4. Set `VECTOR_STORE_BACKEND=<your_backend>` in `.env`
+
+**Query result format** (all backends must return this shape):
+```python
+{
+    "documents": [["chunk text", ...]],
+    "metadatas": [[{"source": ..., "title": ...}, ...]],
+    "distances": [[0.05, 0.12, ...]],  # cosine distance, lower = more similar
+}
+```
+
+-----
+
 ## RAG Pipeline Overview
 
 1. **Ingest** — Scrape/download documents from sources
 1. **Process** — Extract text from HTML/PDF, clean, chunk
 1. **Embed** — Convert chunks to vectors using multilingual embeddings
-1. **Store** — Save vectors + metadata in ChromaDB
+1. **Store** — Save vectors + metadata via `get_vector_store()` (ChromaDB by default)
 1. **Query** — User asks question → retrieve relevant chunks → LLM generates answer with citations
 
 -----
@@ -188,12 +214,12 @@ python backend/src/embeddings/create_embeddings.py
 
 ## Cost Estimates
 
-|Setup                 |Monthly Cost|
-|----------------------|------------|
-|Dev (Ollama local)    |$0          |
-|Minimal production    |$0–1        |
-|Recommended production|$20–50      |
-|High-performance      |$150–220    |
+|Setup                 |Monthly Cost|Notes                              |
+|----------------------|------------|-----------------------------------|
+|Dev (local)           |$0          |ChromaDB on disk, ~$0.002/query    |
+|Minimal production    |$1–5        |Light traffic, Claude Haiku        |
+|Recommended production|$20–50      |Moderate traffic + VPS for ChromaDB|
+|High-performance      |$150–220    |High traffic, faster Claude models |
 
 -----
 
@@ -201,6 +227,8 @@ python backend/src/embeddings/create_embeddings.py
 
 - Project name: **Pili-Pinas**
 - This is a solo project by Kiko (Senior Software Engineer, Manila)
+- **Workflow: TDD** — write tests first, then implementation (pytest)
 - Prefer Python, concise code, and well-commented scrapers
 - Data freshness matters — politicians’ records change with elections (next PH election: May 2025)
 - Prioritize citation of sources in all LLM outputs so voters can verify claims
+- Vector store is swappable — always use `get_vector_store()`, never import ChromaDB directly

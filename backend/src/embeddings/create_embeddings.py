@@ -16,7 +16,8 @@ from pathlib import Path
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
-from vector_store import get_chroma_client, get_or_create_collection, upsert_documents
+from embeddings.base import VectorStore
+from embeddings.vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +58,9 @@ def load_jsonl(path: Path) -> list[dict]:
     return docs
 
 
-def embed_collection(jsonl_path: Path, model: SentenceTransformer, collection) -> int:
+def embed_collection(jsonl_path: Path, model: SentenceTransformer, store: VectorStore) -> int:
     """
-    Embed all chunks in a JSONL file and upsert into ChromaDB.
+    Embed all chunks in a JSONL file and upsert into the vector store.
     Returns number of chunks processed.
     """
     docs = load_jsonl(jsonl_path)
@@ -78,16 +79,13 @@ def embed_collection(jsonl_path: Path, model: SentenceTransformer, collection) -
         embeddings = model.encode(batch, normalize_embeddings=True).tolist()
         all_embeddings.extend(embeddings)
 
-    # Prepare ChromaDB upsert args
     ids = [doc_id(d, i) for i, d in enumerate(docs)]
-    metadatas = [d for d in docs]
 
-    upsert_documents(
-        collection=collection,
+    store.upsert(
         ids=ids,
         embeddings=all_embeddings,
         documents=texts,
-        metadatas=metadatas,
+        metadatas=docs,
     )
 
     return len(docs)
@@ -100,8 +98,7 @@ def run_embedding_pipeline(collections: list[str] | None = None) -> dict:
     Returns stats dict.
     """
     model = load_model()
-    client = get_chroma_client()
-    chroma_collection = get_or_create_collection(client)
+    store = get_vector_store()
 
     jsonl_files = list(PROCESSED_DIR.glob("*.jsonl"))
     if not jsonl_files:
@@ -115,11 +112,11 @@ def run_embedding_pipeline(collections: list[str] | None = None) -> dict:
     total = 0
 
     for path in jsonl_files:
-        count = embed_collection(path, model, chroma_collection)
+        count = embed_collection(path, model, store)
         stats[path.stem] = count
         total += count
 
-    logger.info(f"\n=== Embedding complete: {total} total chunks in ChromaDB ===")
+    logger.info(f"\n=== Embedding complete: {total} total chunks in {store.name} ===")
     for name, count in stats.items():
         logger.info(f"  {name}: {count} chunks")
 
