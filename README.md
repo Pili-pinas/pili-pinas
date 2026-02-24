@@ -19,6 +19,9 @@ Pili-Pinas uses a RAG (Retrieval-Augmented Generation) pipeline to summarize pol
 cp .env.example .env
 # Add your ANTHROPIC_API_KEY to .env
 
+uv venv .venv --python 3.11
+source .venv/bin/activate
+
 # Install backend deps
 uv pip install -r backend/requirements.txt
 
@@ -33,6 +36,51 @@ uvicorn backend.src.api.main:app --reload
 
 # Start UI (separate terminal)
 streamlit run frontend/app.py
+```
+
+---
+
+## Next Steps
+
+### 1. Environment setup
+```bash
+cp .env.example .env
+# Add your ANTHROPIC_API_KEY to .env
+
+uv venv .venv --python 3.11
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+
+uv pip install -r backend/requirements.txt
+uv pip install -r frontend/requirements.txt
+```
+
+### 2. Fix scraper selectors
+The scrapers have assumed CSS selectors — verify them against the live pages.
+Start with the most reliable source first:
+```bash
+python backend/src/data_ingestion/scrapers/news_sites.py  # RSS feeds — works as-is
+python backend/src/data_ingestion/scrapers/senate.py      # HTML — likely needs fixes
+```
+
+### 3. Ingest documents (start small)
+```bash
+python backend/src/data_ingestion/ingestion.py --sources news --max-news 10
+```
+
+### 4. Build vector embeddings
+```bash
+python backend/src/embeddings/create_embeddings.py
+```
+
+### 5. Test the RAG chain
+```bash
+python backend/src/retrieval/rag_chain.py
+```
+
+### 6. Run the full stack
+```bash
+uvicorn backend.src.api.main:app --reload
+streamlit run frontend/app.py  # separate terminal
 ```
 
 ---
