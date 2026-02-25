@@ -100,37 +100,51 @@ User query
 
 ## Deploying to Fly.io
 
-### One-time setup
+Use `scripts/fly-deploy.sh` — it handles volume cleanup automatically before every deploy, so you never hit the "insufficient resources" zone-capacity error manually.
+
+### First-time setup
 ```bash
 # Install flyctl
 brew install flyctl        # macOS
 # or: curl -L https://fly.io/install.sh | sh
 
-fly auth login
-fly launch --no-deploy     # creates the app, skips first deploy
-
-# Create the persistent volume for ChromaDB (3 GB, Singapore region)
-fly volumes create vector_db --region sin --size 3
-
-# Set your Anthropic key as a secret
-fly secrets set ANTHROPIC_API_KEY=sk-ant-...
+# Create the app, set your API key, and deploy in one step
+./scripts/fly-deploy.sh --setup
 ```
 
-### Deploy
+`--setup` will:
+1. Open the Fly.io login page if you're not already authenticated
+2. Create the `pili-pinas-api` app (skips if it already exists)
+3. Prompt for your `ANTHROPIC_API_KEY` and set it as a Fly secret
+4. Run the full deploy
+
+### Subsequent deploys
 ```bash
-fly deploy
+./scripts/fly-deploy.sh
+```
+
+The script automatically destroys any unattached `vector_db` volumes before deploying,
+which prevents the _"insufficient resources to create new machine with existing volume"_
+error that occurs when Fly can't place the machine in the same zone as an orphaned volume.
+
+The volume is auto-created on first deploy via `initial_size = '3gb'` in `fly.toml`.
+
+### IPv6 issues
+If `fly logs` or the deploy errors with a `dial tcp [...]:443: connect: no route to host` message, your ISP blocks IPv6. Prefix any `fly` command with `FLYCTL_NO_IPV6=1`, or add it to your shell profile:
+```bash
+echo 'export FLYCTL_NO_IPV6=1' >> ~/.zshrc
 ```
 
 ### Useful commands
 ```bash
-fly logs              # tail live logs
-fly status            # machine health
-fly ssh console       # SSH into the container
-fly volumes list      # check volume usage
+FLYCTL_NO_IPV6=1 fly logs --app pili-pinas-api    # tail live logs
+FLYCTL_NO_IPV6=1 fly status --app pili-pinas-api  # machine health
+FLYCTL_NO_IPV6=1 fly ssh console --app pili-pinas-api  # SSH into container
+FLYCTL_NO_IPV6=1 fly volumes list --app pili-pinas-api # check volume usage
 ```
 
 > **Region**: `sin` (Singapore) is the closest Fly region to the Philippines.
-> Change in `fly.toml` if you prefer a different region.
+> Change `primary_region` in `fly.toml` if you prefer a different region.
 
 ---
 
