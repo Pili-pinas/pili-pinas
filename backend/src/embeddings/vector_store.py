@@ -24,7 +24,7 @@ from embeddings.base import VectorStore
 
 logger = logging.getLogger(__name__)
 
-VECTOR_DB_DIR = Path(__file__).parents[3] / "vector_db"
+VECTOR_DB_DIR = Path(__file__).parents[2] / "vector_db"
 COLLECTION_NAME = "pili_pinas"
 
 
