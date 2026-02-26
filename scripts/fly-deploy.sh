@@ -13,6 +13,8 @@ set -euo pipefail
 
 APP="pili-pinas-api"
 VOLUME_NAME="vector_db"
+REGION="sin"
+VOLUME_SIZE_GB=3
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -76,6 +78,25 @@ if [[ -n "$STUCK_IDS" ]]; then
     done <<< "$STUCK_IDS"
 else
     info "No stuck volumes found."
+fi
+
+# ── ensure at least one volume exists ────────────────────────────────────────
+
+VOLUME_COUNT=$(
+    fly_cmd volumes list --app "$APP" --json 2>/dev/null \
+    | python3 -c "
+import json, sys
+vols = json.load(sys.stdin)
+print(sum(1 for v in vols if v.get('name') == '$VOLUME_NAME'))
+" || echo "0"
+)
+
+if [[ "$VOLUME_COUNT" == "0" ]]; then
+    info "No '$VOLUME_NAME' volume found — creating one in region $REGION..."
+    fly_cmd volumes create "$VOLUME_NAME" --app "$APP" --region "$REGION" --size "$VOLUME_SIZE_GB" --yes
+    info "Volume created."
+else
+    info "Volume exists ($VOLUME_COUNT found)."
 fi
 
 # ── deploy ────────────────────────────────────────────────────────────────────
