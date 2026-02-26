@@ -21,12 +21,13 @@ from pathlib import Path
 # Allow imports from backend/src
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 from retrieval.rag_chain import get_rag
 from embeddings.vector_store import get_vector_store
+from api.auth import verify_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -348,7 +349,9 @@ def stats():
     summary="Ask a question about Philippine politics",
     response_model=QueryResponse,
     response_description="AI-generated answer with cited sources.",
+    dependencies=[Depends(verify_api_key)],
     responses={
+        401: {"description": "Missing or invalid API key."},
         422: {"description": "Validation error — question too short or invalid field."},
         500: {"description": "RAG pipeline error."},
     },
@@ -440,8 +443,10 @@ def _run_scrape_job(job_id: str, req: ScrapeRequest) -> None:
                 }
             },
         },
+        401: {"description": "Missing or invalid API key."},
         422: {"description": "Invalid source name supplied."},
     },
+    dependencies=[Depends(verify_api_key)],
 )
 def trigger_scrape(req: ScrapeRequest, background_tasks: BackgroundTasks):
     """
@@ -501,8 +506,10 @@ def trigger_scrape(req: ScrapeRequest, background_tasks: BackgroundTasks):
     summary="Poll a scrape job's status",
     response_model=ScrapeJobStatus,
     response_description="Current state of the scrape job.",
+    dependencies=[Depends(verify_api_key)],
     responses={
         200: {"description": "Job found — check `status` field for current state."},
+        401: {"description": "Missing or invalid API key."},
         404: {"description": "No job found with this ID."},
     },
 )
