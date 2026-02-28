@@ -27,14 +27,42 @@ HEADERS = {
     )
 }
 
-# RSS feeds for political news sections
+# Politics-focused RSS feeds (one per source, most specific available)
 RSS_FEEDS = {
-    "rappler.com": "https://www.rappler.com/nation/feed/",
+    "rappler.com": "https://www.rappler.com/politics-government/feed/",
     "inquirer.net": "https://politics.inquirer.net/feed/",
-    "philstar.com": "https://www.philstar.com/rss/nation",
+    "philstar.com": "https://www.philstar.com/rss/politics",
     "mb.com.ph": "https://mb.com.ph/category/news/national/feed/",
-    "gmanetwork.com": "https://data.gmanetwork.com/gno/rss/news/nation/feed.xml",
+    "gmanetwork.com": "https://data.gmanetwork.com/gno/rss/news/government/feed.xml",
 }
+
+# Keywords used to filter article titles/descriptions.
+# An article must match at least one keyword to be kept.
+POLITICS_KEYWORDS = [
+    # Institutions
+    "senate", "senado", "congress", "house of representatives", "comelec",
+    "supreme court", "ombudsman", "malacañang", "palace",
+    # Roles
+    "senator", "congressman", "representative", "president", "vice president",
+    "governor", "mayor", "pangulo", "gobernador", "alkalde", "cabinet",
+    # Process
+    "election", "halalan", "vote", "boto", "campaign", "kandidato", "candidate",
+    "bill", "law", "batas", "republic act", "resolution", "budget", "appropriation",
+    "impeach", "resign", "appoint", "saln", "corruption", "plunder",
+    # Parties / coalitions (generic)
+    "political party", "coalition", "opposition", "administration",
+    # High-profile names (add more as relevant)
+    "marcos", "duterte", "robredo", "cayetano", "lacson", "escudero",
+    "bongbong", "sara", "leni",
+]
+
+_KEYWORDS_LOWER = [kw.lower() for kw in POLITICS_KEYWORDS]
+
+
+def _is_politics_related(title: str, description: str) -> bool:
+    """Return True if the article title or description matches any politics keyword."""
+    text = f"{title} {description}".lower()
+    return any(kw in text for kw in _KEYWORDS_LOWER)
 
 
 def _get(url: str) -> Optional[requests.Response]:
@@ -84,12 +112,17 @@ def scrape_rss_feed(source: str, feed_url: str, max_items: int = 20) -> list[dic
     ns = {"atom": "http://www.w3.org/2005/Atom"}
     items = root.findall(".//item") or root.findall(".//atom:entry", ns)
 
-    for item in items[:max_items]:
+    for item in items[:max_items * 3]:  # scan more items to hit max_items after filtering
         # Extract fields (handles both RSS 2.0 and Atom)
         title = (item.findtext("title") or item.findtext("atom:title", namespaces=ns) or "").strip()
         url = (item.findtext("link") or item.findtext("atom:link", namespaces=ns) or "").strip()
         pub_date = item.findtext("pubDate") or item.findtext("atom:published", namespaces=ns) or ""
         description = item.findtext("description") or item.findtext("atom:summary", namespaces=ns) or ""
+
+        # Skip non-political articles before fetching full text
+        if not _is_politics_related(title, description):
+            logger.debug(f"[{source}] Skipped (not politics): {title[:70]}")
+            continue
 
         date = _parse_rss_date(pub_date) if pub_date else datetime.now().strftime("%Y-%m-%d")
 
@@ -111,6 +144,9 @@ def scrape_rss_feed(source: str, feed_url: str, max_items: int = 20) -> list[dic
 
         documents.append(doc)
         logger.info(f"[{source}] {title[:70]}")
+
+        if len(documents) >= max_items:
+            break
 
     return documents
 
