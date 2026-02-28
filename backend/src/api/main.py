@@ -118,31 +118,11 @@ VALID_SOURCES = [
 
 class QueryRequest(BaseModel):
     model_config = ConfigDict(json_schema_extra={
-        "examples": [
-            {
-                "summary": "Education bills",
-                "value": {
-                    "question": "What education bills has the Senate passed this year?",
-                    "source_type": "bill",
-                    "top_k": 5,
-                },
-            },
-            {
-                "summary": "Politician profile (Filipino)",
-                "value": {
-                    "question": "Sino si Leni Robredo at ano ang kanyang mga nagawa?",
-                    "top_k": 5,
-                },
-            },
-            {
-                "summary": "SALN / financial disclosure",
-                "value": {
-                    "question": "What assets did Senator Marcos declare in his SALN?",
-                    "source_type": "saln",
-                    "top_k": 3,
-                },
-            },
-        ]
+        "example": {
+            "question": "What education bills has the Senate passed this year?",
+            "source_type": "bill",
+            "top_k": 5,
+        }
     })
 
     question: str = Field(
@@ -212,35 +192,11 @@ class QueryResponse(BaseModel):
 
 class ScrapeRequest(BaseModel):
     model_config = ConfigDict(json_schema_extra={
-        "examples": [
-            {
-                "summary": "News only (fast)",
-                "value": {
-                    "sources": ["news"],
-                    "max_news": 20,
-                    "embed": True,
-                },
-            },
-            {
-                "summary": "Senate bills + senators",
-                "value": {
-                    "sources": ["senate_bills", "senators"],
-                    "congress": 19,
-                    "max_pages": 3,
-                    "embed": True,
-                },
-            },
-            {
-                "summary": "Full scrape (slow)",
-                "value": {
-                    "sources": None,
-                    "congress": 19,
-                    "max_pages": 5,
-                    "max_news": 50,
-                    "embed": True,
-                },
-            },
-        ]
+        "example": {
+            "sources": ["news"],
+            "max_news": 20,
+            "embed": True,
+        }
     })
 
     sources: list[str] | None = Field(

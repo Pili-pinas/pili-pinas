@@ -24,6 +24,7 @@ env/
 .idea/
 *.swp
 *.swo
+data
 
 # Data (raw + processed — can be large; regenerate from scrapers)
 backend/data/raw/
