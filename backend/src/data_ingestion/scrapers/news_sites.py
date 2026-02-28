@@ -16,7 +16,11 @@ from typing import Optional
 import requests
 from bs4 import BeautifulSoup
 
+from data_ingestion.seen_urls import SeenURLTracker
+
 logger = logging.getLogger(__name__)
+
+_seen = SeenURLTracker()
 
 RAW_DIR = Path(__file__).parents[4] / "data" / "raw" / "news_articles"
 
@@ -136,11 +140,15 @@ def scrape_rss_feed(source: str, feed_url: str, max_items: int = 20) -> list[dic
             "text": BeautifulSoup(description, "lxml").get_text(strip=True),
         }
 
-        # Fetch full article text
+        # Fetch full article text (skip if already ingested)
         if url:
+            if _seen.seen(url):
+                logger.debug(f"[{source}] Already seen, skipping: {url}")
+                continue
             full_text = _fetch_article_text(url, source)
             if full_text:
                 doc["text"] = full_text
+            _seen.mark(url)
 
         documents.append(doc)
         logger.info(f"[{source}] {title[:70]}")
@@ -190,8 +198,9 @@ def scrape_all_news(max_items_per_source: int = 20) -> list[dict]:
         logger.info(f"Scraping {source}...")
         docs = scrape_rss_feed(source, feed_url, max_items=max_items_per_source)
         all_docs.extend(docs)
-        logger.info(f"  → {len(docs)} articles from {source}")
-    logger.info(f"Total news articles scraped: {len(all_docs)}")
+        logger.info(f"  → {len(docs)} new articles from {source}")
+    _seen.save()
+    logger.info(f"Total new articles scraped: {len(all_docs)} (tracker: {len(_seen)} URLs seen)")
     return all_docs
 
 

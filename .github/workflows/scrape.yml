@@ -1,0 +1,41 @@
+name: Daily scrape
+
+on:
+  schedule:
+    - cron: "0 1 * * *"  # 01:00 UTC = 09:00 Philippine Time (UTC+8)
+  workflow_dispatch:       # allow manual trigger from GitHub UI
+
+jobs:
+  scrape:
+    name: Scrape and embed
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger scrape job
+        run: |
+          JOB=$(curl -sf -X POST "$API_URL/scrape" \
+            -H "Content-Type: application/json" \
+            -H "X-API-Key: $API_KEY" \
+            -d '{"sources": ["news", "senate_bills", "senators"], "max_news": 30, "embed": true}')
+          echo "Job started: $JOB"
+          JOB_ID=$(echo "$JOB" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
+
+          # Poll until done (max 15 min)
+          for i in $(seq 1 30); do
+            sleep 30
+            STATUS=$(curl -sf "$API_URL/scrape/$JOB_ID" -H "X-API-Key: $API_KEY")
+            STATE=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+            echo "[$i] status: $STATE"
+            if [[ "$STATE" == "done" ]]; then
+              echo "$STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print('chunks:', d.get('stats',{}))"
+              exit 0
+            elif [[ "$STATE" == "failed" ]]; then
+              echo "Scrape job failed: $STATUS"
+              exit 1
+            fi
+          done
+          echo "Timed out waiting for scrape job"
+          exit 1
+        env:
+          API_URL: ${{ secrets.PILI_PINAS_API_URL }}
+          API_KEY: ${{ secrets.PILI_PINAS_API_KEY }}
