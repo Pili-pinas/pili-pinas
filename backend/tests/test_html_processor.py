@@ -100,9 +100,9 @@ class TestChunkText:
         assert "Second paragraph." in chunks[0]
 
     def test_custom_chunk_size(self):
-        text = "Word " * 100  # 500 chars
-        chunks = chunk_text(text, chunk_size=100, overlap=20)
-        # All chunks should be produced
+        # Use sentences so the chunker has split points; 10 × 22 chars = 220 chars
+        text = "The Senate voted yes. " * 10
+        chunks = chunk_text(text, chunk_size=50, overlap=10)
         assert len(chunks) > 1
 
 

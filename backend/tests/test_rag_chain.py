@@ -114,11 +114,12 @@ class TestQuery:
         assert source["score"] == 0.75
 
     def test_score_is_rounded_to_3_decimal_places(self):
-        chunk = _make_chunk(score=0.123456789)
+        # Score must exceed min_score=0.3 so the chunk is not filtered out
+        chunk = _make_chunk(score=0.987654321)
         self.rag.retrieve = MagicMock(return_value=[chunk])
         self.rag._call_llm = MagicMock(return_value="Answer.")
         result = self.rag.query("question")
-        assert result.sources[0]["score"] == 0.123
+        assert result.sources[0]["score"] == 0.988
 
     def test_query_is_stored_in_result(self):
         self.rag.retrieve = MagicMock(return_value=[])
@@ -136,20 +137,17 @@ class TestRetrieve:
         rag = PiliPinasRAG.__new__(PiliPinasRAG)
         rag.top_k = 5
         rag._embedding_model = None
-        rag._collection = None
+        rag._store = None
 
         mock_model = MagicMock()
         mock_model.encode.return_value = MagicMock(tolist=lambda: [[0.1, 0.2]])
 
-        with patch.object(rag, "_get_embedding_model", return_value=mock_model), \
-             patch.object(rag, "_get_collection") as mock_coll_fn:
-            mock_collection = MagicMock()
-            mock_collection.query.return_value = mock_chroma_results
-            mock_coll_fn.return_value = mock_collection
+        mock_store = MagicMock()
+        mock_store.query.return_value = mock_chroma_results
 
-            # Import and patch query_collection
-            with patch("retrieval.rag_chain.query_collection", return_value=mock_chroma_results):
-                chunks = rag.retrieve("test question")
+        with patch.object(rag, "_get_embedding_model", return_value=mock_model), \
+             patch.object(rag, "_get_store", return_value=mock_store):
+            chunks = rag.retrieve("test question")
 
         # distance 0.1 → score 0.9, distance 0.25 → score 0.75
         assert len(chunks) == 2
@@ -160,17 +158,17 @@ class TestRetrieve:
         rag = PiliPinasRAG.__new__(PiliPinasRAG)
         rag.top_k = 5
         rag._embedding_model = None
-        rag._collection = None
+        rag._store = None
 
         mock_model = MagicMock()
         mock_model.encode.return_value = MagicMock(tolist=lambda: [[0.1]])
 
-        empty_results = {"documents": [[]], "metadatas": [[]], "distances": [[]]}
+        mock_store = MagicMock()
+        mock_store.query.return_value = {"documents": [[]], "metadatas": [[]], "distances": [[]]}
 
         with patch.object(rag, "_get_embedding_model", return_value=mock_model), \
-             patch.object(rag, "_get_collection"):
-            with patch("retrieval.rag_chain.query_collection", return_value=empty_results):
-                chunks = rag.retrieve("question")
+             patch.object(rag, "_get_store", return_value=mock_store):
+            chunks = rag.retrieve("question")
 
         assert chunks == []
 

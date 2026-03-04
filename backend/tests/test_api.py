@@ -1,7 +1,8 @@
 """
 Tests for api/main.py
 
-Uses FastAPI's TestClient. Heavy dependencies (RAG, ChromaDB, scrapers) are mocked.
+Uses FastAPI's TestClient. Heavy dependencies (RAG, vector store, scrapers)
+are mocked. The auth dependency is bypassed via app.dependency_overrides.
 """
 
 import pytest
@@ -9,15 +10,18 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from api.main import app, _jobs
+from api.auth import verify_api_key
 from retrieval.rag_chain import RAGResult
 
 
 @pytest.fixture(autouse=True)
 def clear_jobs():
-    """Reset the in-memory job store before each test."""
+    """Reset job store and bypass auth before each test."""
     _jobs.clear()
+    app.dependency_overrides[verify_api_key] = lambda: "test-api-key"
     yield
     _jobs.clear()
+    app.dependency_overrides.clear()
 
 
 client = TestClient(app)
@@ -55,25 +59,23 @@ class TestHealth:
 
 class TestStats:
     def test_returns_200(self):
-        mock_col = MagicMock()
-        mock_col.name = "pili_pinas"
-        mock_col.count.return_value = 0
-        with patch("api.main.get_chroma_client"), \
-             patch("api.main.get_or_create_collection", return_value=mock_col):
+        mock_store = MagicMock()
+        mock_store.name = "pili_pinas"
+        mock_store.count.return_value = 0
+        with patch("api.main.get_vector_store", return_value=mock_store):
             assert client.get("/stats").status_code == 200
 
     def test_returns_collection_name_and_chunk_count(self):
-        mock_col = MagicMock()
-        mock_col.name = "pili_pinas"
-        mock_col.count.return_value = 42
-        with patch("api.main.get_chroma_client"), \
-             patch("api.main.get_or_create_collection", return_value=mock_col):
+        mock_store = MagicMock()
+        mock_store.name = "pili_pinas"
+        mock_store.count.return_value = 42
+        with patch("api.main.get_vector_store", return_value=mock_store):
             data = client.get("/stats").json()
         assert data["collection"] == "pili_pinas"
         assert data["total_chunks"] == 42
 
-    def test_returns_500_when_chroma_fails(self):
-        with patch("api.main.get_chroma_client", side_effect=Exception("DB error")):
+    def test_returns_500_when_store_fails(self):
+        with patch("api.main.get_vector_store", side_effect=Exception("DB error")):
             assert client.get("/stats").status_code == 500
 
 

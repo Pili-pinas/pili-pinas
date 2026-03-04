@@ -115,7 +115,7 @@ class TestRunIngestion:
         monkeypatch.setattr(ingestion, "scrape_laws", no_docs)
         monkeypatch.setattr(ingestion, "scrape_house_bills", no_docs)
         monkeypatch.setattr(ingestion, "scrape_members", no_docs)
-        monkeypatch.setattr(ingestion, "scrape_candidate_list", no_docs)
+        monkeypatch.setattr(ingestion, "scrape_all_comelec", no_docs)
         monkeypatch.setattr(ingestion, "scrape_all_news", one_doc)
         monkeypatch.setattr(ingestion, "process_html_document", one_chunk)
         return {
@@ -155,7 +155,7 @@ class TestRunIngestion:
         monkeypatch.setattr(ingestion, "scrape_laws", MagicMock(return_value=[]))
         monkeypatch.setattr(ingestion, "scrape_house_bills", MagicMock(return_value=[]))
         monkeypatch.setattr(ingestion, "scrape_members", MagicMock(return_value=[]))
-        monkeypatch.setattr(ingestion, "scrape_candidate_list", MagicMock(return_value=[]))
+        monkeypatch.setattr(ingestion, "scrape_all_comelec", MagicMock(return_value=[]))
 
         stats = ingestion.run_ingestion(sources=["news"])
         assert stats["counts"].get("news_articles", 0) == 0

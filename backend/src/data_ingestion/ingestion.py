@@ -8,16 +8,20 @@ Run:
 
 import json
 import logging
+import sys
 import argparse
 from datetime import datetime
 from pathlib import Path
 
-from scrapers.senate import scrape_bills as scrape_senate_bills, scrape_senators
-from scrapers.official_gazette import scrape_laws
-from scrapers.congress import scrape_house_bills, scrape_members
-from scrapers.comelec import scrape_all_comelec
-from scrapers.news_sites import scrape_all_news
-from processors.html_processor import process_html_document
+# Ensure 'src/' is on the path when run as a script (python ingestion.py)
+sys.path.insert(0, str(Path(__file__).parents[2]))
+
+from data_ingestion.scrapers.senate import scrape_bills as scrape_senate_bills, scrape_senators
+from data_ingestion.scrapers.official_gazette import scrape_laws
+from data_ingestion.scrapers.congress import scrape_house_bills, scrape_members
+from data_ingestion.scrapers.comelec import scrape_all_comelec
+from data_ingestion.scrapers.news_sites import scrape_all_news
+from data_ingestion.processors.html_processor import process_html_document
 
 logger = logging.getLogger(__name__)
 
