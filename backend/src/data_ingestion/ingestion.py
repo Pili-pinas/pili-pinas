@@ -15,7 +15,7 @@ from pathlib import Path
 from scrapers.senate import scrape_bills as scrape_senate_bills, scrape_senators
 from scrapers.official_gazette import scrape_laws
 from scrapers.congress import scrape_house_bills, scrape_members
-from scrapers.comelec import scrape_candidate_list
+from scrapers.comelec import scrape_all_comelec
 from scrapers.news_sites import scrape_all_news
 from processors.html_processor import process_html_document
 
@@ -120,9 +120,12 @@ def run_ingestion(
         _process_and_save(docs, "house_members")
 
     if "comelec" in sources:
-        logger.info("=== COMELEC Candidates ===")
-        docs = scrape_candidate_list(election_year=2025)
-        _process_and_save(docs, "comelec_candidates")
+        logger.info("=== COMELEC (candidates + resolutions) ===")
+        # scrape_all_comelec returns pre-chunked PDF docs — save directly
+        docs = scrape_all_comelec(election_year=2025, max_resolutions=30)
+        if docs:
+            save_documents(docs, "comelec")
+        stats["counts"]["comelec"] = len(docs)
 
     if "news" in sources:
         logger.info("=== News Articles ===")
