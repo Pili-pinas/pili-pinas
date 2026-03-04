@@ -31,13 +31,15 @@ HEADERS = {
     )
 }
 
-# Politics-focused RSS feeds (one per source, most specific available)
+# Politics-focused RSS feeds — verified working as of 2026-03.
+# mb.com.ph dropped: all their feeds return JS-rendered HTML (no RSS without a browser).
 RSS_FEEDS = {
-    "rappler.com": "https://www.rappler.com/politics-government/feed/",
-    "inquirer.net": "https://politics.inquirer.net/feed/",
-    "philstar.com": "https://www.philstar.com/rss/politics",
-    "mb.com.ph": "https://mb.com.ph/category/news/national/feed/",
-    "gmanetwork.com": "https://data.gmanetwork.com/gno/rss/news/government/feed.xml",
+    "rappler.com":      "https://www.rappler.com/category/nation/politics/feed/",
+    "inquirer.net":     "https://newsinfo.inquirer.net/feed",
+    "philstar.com":     "https://www.philstar.com/rss/nation",
+    "bworldonline.com": "https://www.bworldonline.com/feed/",
+    "gmanetwork.com":   "https://data.gmanetwork.com/gno/rss/news/nation/feed.xml",
+    "pcij.org":         "https://pcij.org/feed/",
 }
 
 # Keywords used to filter article titles/descriptions.
