@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from retrieval.rag_chain import get_rag
 from embeddings.vector_store import get_vector_store
 from api.auth import verify_api_key
+from api.messenger import messenger_router
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(messenger_router, prefix="/messenger", tags=["messenger"])
 
 
 # ── In-memory job store ───────────────────────────────────────────────────────
