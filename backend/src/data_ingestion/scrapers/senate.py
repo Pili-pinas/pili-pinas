@@ -1,13 +1,16 @@
 """
 Senate of the Philippines scraper.
-Scrapes bills, resolutions, and senator profiles from senate.gov.ph.
 
-Respects robots.txt — senate.gov.ph allows crawling of public pages.
+Data sources (senate.gov.ph is Cloudflare-blocked):
+  - Bills  : BetterGov Open Congress API (open-congress-api.bettergov.ph)
+  - Senators: Wikipedia current senators list + individual senator pages
+
 Rate limit: 1–2 seconds between requests.
 """
 
 import time
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -17,11 +20,13 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://www.senate.gov.ph"
-BILLS_URL = f"{BASE_URL}/lis/bill_res.aspx"
-SENATORS_URL = f"{BASE_URL}/senators"
+BETTERGOV_URL = "https://open-congress-api.bettergov.ph/api/documents"
+WIKIPEDIA_SENATORS_URL = (
+    "https://en.wikipedia.org/wiki/List_of_current_senators_of_the_Philippines"
+)
+WIKIPEDIA_BASE = "https://en.wikipedia.org"
 
-# Output directory (raw HTML saved before processing)
+# Output directory for raw HTML (saved before processing)
 RAW_DIR = Path(__file__).parents[4] / "data" / "raw"
 
 HEADERS = {
@@ -38,7 +43,7 @@ def _get(url: str, params: Optional[dict] = None, retries: int = 3) -> Optional[
         try:
             resp = requests.get(url, params=params, headers=HEADERS, timeout=15)
             resp.raise_for_status()
-            time.sleep(1.5)  # rate limit
+            time.sleep(1.5)
             return resp
         except requests.RequestException as e:
             logger.warning(f"Attempt {attempt + 1} failed for {url}: {e}")
@@ -47,143 +52,136 @@ def _get(url: str, params: Optional[dict] = None, retries: int = 3) -> Optional[
     return None
 
 
-def scrape_bills(congress: int = 19, max_pages: int = 5) -> list[dict]:
-    """
-    Scrape Senate bills and resolutions for a given Congress.
+# ---------------------------------------------------------------------------
+# Bills — BetterGov Open Congress API
+# ---------------------------------------------------------------------------
 
-    Returns a list of document dicts matching the metadata schema.
+def scrape_bills(congress: int = 20, max_items: int = 100) -> list[dict]:
+    """
+    Scrape Senate Bills for a given Congress via the BetterGov API.
+
+    Args:
+        congress: Congress number (default 20 = current as of 2025).
+        max_items: Maximum number of bills to return.
+
+    Returns:
+        List of document dicts matching the metadata schema.
     """
     documents = []
-    page = 1
+    cursor: Optional[str] = None
+    page_size = min(50, max_items)
 
-    while page <= max_pages:
-        params = {
-            "congress": congress,
-            "type": "SB",  # Senate Bill
-            "pg": page,
-        }
-        resp = _get(BILLS_URL, params=params)
+    while len(documents) < max_items:
+        params: dict = {"type": "SB", "congress": congress, "limit": page_size}
+        if cursor:
+            params["cursor"] = cursor
+
+        resp = _get(BETTERGOV_URL, params=params)
         if resp is None:
             break
 
-        soup = BeautifulSoup(resp.text, "lxml")
-        rows = soup.select("table.bills-table tr")[1:]  # skip header
-
-        if not rows:
-            logger.info(f"No more rows at page {page}, stopping.")
+        try:
+            payload = resp.json()
+        except Exception as e:
+            logger.error(f"Failed to parse BetterGov response: {e}")
             break
 
-        for row in rows:
-            cells = row.find_all("td")
-            if len(cells) < 4:
-                continue
+        if not payload.get("success"):
+            logger.error(f"BetterGov API error: {payload}")
+            break
 
-            bill_number = cells[0].get_text(strip=True)
-            title = cells[1].get_text(strip=True)
-            author = cells[2].get_text(strip=True)
-            status = cells[3].get_text(strip=True)
-
-            # Try to get detail page link
-            link_tag = cells[1].find("a")
-            detail_url = BASE_URL + link_tag["href"] if link_tag else ""
-
-            doc = {
-                "source": "senate.gov.ph",
-                "source_type": "bill",
-                "date": datetime.now().strftime("%Y-%m-%d"),  # updated when detail scraped
-                "politician": author,
-                "title": f"Senate Bill {bill_number}: {title}",
-                "url": detail_url,
-                "bill_number": bill_number,
-                "status": status,
-                "congress": congress,
-                "text": "",  # filled by _scrape_bill_detail
-            }
-
-            if detail_url:
-                doc = _scrape_bill_detail(doc)
-
+        for bill in payload.get("data", []):
+            doc = _bill_to_doc(bill, congress)
             documents.append(doc)
-            logger.info(f"Scraped: {bill_number} — {title[:60]}")
+            logger.info(f"Scraped bill: {doc['title'][:70]}")
 
-        page += 1
+            if len(documents) >= max_items:
+                break
 
-    logger.info(f"Total bills scraped: {len(documents)}")
+        pagination = payload.get("pagination", {})
+        if not pagination.get("has_more") or len(documents) >= max_items:
+            break
+        cursor = pagination.get("next_cursor")
+
+    logger.info(f"Total senate bills scraped: {len(documents)}")
     return documents
 
 
-def _scrape_bill_detail(doc: dict) -> dict:
-    """Fetch the bill detail page and extract full text + date."""
-    resp = _get(doc["url"])
-    if resp is None:
-        return doc
+def _bill_to_doc(bill: dict, congress: int) -> dict:
+    """Convert a BetterGov API bill record to our metadata schema."""
+    name = bill.get("name", "")       # e.g. "SBN-01321"
+    title = bill.get("title") or ""
+    long_title = bill.get("long_title") or ""
+    subjects = bill.get("subjects") or []
+    authors_raw = bill.get("authors_raw") or ""
 
-    # Save raw HTML
-    safe_name = doc["bill_number"].replace(" ", "_").replace("/", "-")
-    raw_path = RAW_DIR / "laws" / f"senate_{safe_name}.html"
-    raw_path.parent.mkdir(parents=True, exist_ok=True)
-    raw_path.write_text(resp.text, encoding="utf-8")
+    text_parts = [title, long_title]
+    if subjects:
+        text_parts.append("Subjects: " + ", ".join(subjects))
 
-    soup = BeautifulSoup(resp.text, "lxml")
+    date_filed = bill.get("date_filed") or datetime.now().strftime("%Y-%m-%d")
 
-    # Extract date filed
-    date_tag = soup.find("td", string=lambda t: t and "Date Filed" in t)
-    if date_tag and date_tag.find_next_sibling("td"):
-        raw_date = date_tag.find_next_sibling("td").get_text(strip=True)
-        try:
-            doc["date"] = datetime.strptime(raw_date, "%B %d, %Y").strftime("%Y-%m-%d")
-        except ValueError:
-            pass  # keep today's date as fallback
+    return {
+        "source": "bettergov.ph",
+        "source_type": "bill",
+        "date": date_filed,
+        "politician": authors_raw,
+        "title": f"{name}: {title}" if name else title,
+        "url": bill.get("senate_website_permalink") or "",
+        "text": "\n".join(filter(None, text_parts)),
+        "bill_number": bill.get("bill_number", ""),
+        "congress": congress,
+    }
 
-    # Extract bill text / abstract
-    content_div = soup.find("div", class_="bill-content") or soup.find("div", id="billContent")
-    if content_div:
-        doc["text"] = content_div.get_text(separator="\n", strip=True)
-    else:
-        # Fallback: grab all paragraph text from main content area
-        main = soup.find("div", class_="container") or soup.find("main")
-        if main:
-            doc["text"] = main.get_text(separator="\n", strip=True)
 
-    return doc
-
+# ---------------------------------------------------------------------------
+# Senators — Wikipedia
+# ---------------------------------------------------------------------------
 
 def scrape_senators() -> list[dict]:
     """
-    Scrape current senator profiles from senate.gov.ph/senators.
+    Scrape current senator profiles from Wikipedia.
 
-    Returns a list of profile document dicts.
+    Fetches the list page for basic metadata, then each senator's Wikipedia
+    article for a biographical summary.
+
+    Returns:
+        List of profile document dicts matching the metadata schema.
     """
-    resp = _get(SENATORS_URL)
+    resp = _get(WIKIPEDIA_SENATORS_URL)
     if resp is None:
         return []
 
-    soup = BeautifulSoup(resp.text, "lxml")
+    soup = BeautifulSoup(resp.content, "lxml")
+    senator_rows = _parse_senators_table(soup)
+
+    if not senator_rows:
+        logger.warning("No senators found in Wikipedia table.")
+        return []
+
     documents = []
+    for row in senator_rows:
+        name = row["name"]
+        wiki_path = row["wiki_path"]
 
-    # Senator cards are typically in anchor tags with senator photos + names
-    senator_cards = soup.select("div.senator-card, div.senator-item, td.senator-cell")
+        bio_text = row["bio_text"]  # basic text from table
+        wiki_url = WIKIPEDIA_BASE + wiki_path if wiki_path else ""
 
-    for card in senator_cards:
-        name_tag = card.find("h3") or card.find("strong") or card.find("a")
-        name = name_tag.get_text(strip=True) if name_tag else "Unknown"
-
-        link_tag = card.find("a")
-        profile_url = BASE_URL + link_tag["href"] if link_tag and link_tag.get("href") else ""
+        # Fetch individual Wikipedia article for rich bio content
+        if wiki_path:
+            detail_text = _scrape_senator_wiki_page(name, wiki_path)
+            if detail_text:
+                bio_text = detail_text
 
         doc = {
-            "source": "senate.gov.ph",
+            "source": "wikipedia.org",
             "source_type": "profile",
             "date": datetime.now().strftime("%Y-%m-%d"),
             "politician": name,
             "title": f"Senator Profile: {name}",
-            "url": profile_url,
-            "text": "",
+            "url": wiki_url,
+            "text": bio_text,
         }
-
-        if profile_url:
-            doc = _scrape_senator_detail(doc)
-
         documents.append(doc)
         logger.info(f"Scraped senator: {name}")
 
@@ -191,35 +189,112 @@ def scrape_senators() -> list[dict]:
     return documents
 
 
-def _scrape_senator_detail(doc: dict) -> dict:
-    """Fetch individual senator profile page."""
-    resp = _get(doc["url"])
+def _parse_senators_table(soup: BeautifulSoup) -> list[dict]:
+    """
+    Extract senator rows from the Wikipedia wikitable.
+
+    Column order (12 cells per row):
+      0: Portrait (image)
+      1: Senator name (with link)
+      2: Party flag (image, text is empty)
+      3: Party name
+      4: Bloc (Majority/Minority)
+      5: Born
+      6: Occupation(s)
+      7: Previous elective office(s)
+      8: Education
+      9: Took office
+      10: Term ending
+      11: Term
+    """
+    results = []
+    for table in soup.find_all("table", class_="wikitable"):
+        headers = [th.get_text(strip=True) for th in table.find_all("th")]
+        if "Senator" not in headers:
+            continue
+
+        for row in table.find_all("tr")[1:]:
+            cells = row.find_all("td")
+            if len(cells) < 5:
+                continue
+
+            name = cells[1].get_text(strip=True)
+            if not name:
+                continue
+
+            party = cells[3].get_text(strip=True)
+            bloc = cells[4].get_text(strip=True)
+
+            # Clean born date — strip sortkey prefix like "(1977-05-07)"
+            born_raw = cells[5].get_text(strip=True) if len(cells) > 5 else ""
+            born = re.sub(r"^\(\d{4}-\d{2}-\d{2}\)", "", born_raw).strip()
+
+            occupation = cells[6].get_text(separator=", ", strip=True) if len(cells) > 6 else ""
+            took_office = cells[9].get_text(strip=True) if len(cells) > 9 else ""
+            term_ending = cells[10].get_text(strip=True) if len(cells) > 10 else ""
+
+            link_tag = cells[1].find("a")
+            wiki_path = link_tag["href"] if link_tag else ""
+
+            bio_text = (
+                f"Senator {name}. Party: {party}. Bloc: {bloc}. "
+                f"Occupation: {occupation}. Born: {born}. "
+                f"Took office: {took_office}. Term ending: {term_ending}."
+            )
+
+            results.append({
+                "name": name,
+                "wiki_path": wiki_path,
+                "bio_text": bio_text,
+            })
+
+        break  # only need the first matching table
+
+    return results
+
+
+def _scrape_senator_wiki_page(name: str, wiki_path: str) -> str:
+    """Fetch a senator's Wikipedia article and return the introductory text."""
+    url = WIKIPEDIA_BASE + wiki_path
+    resp = _get(url)
     if resp is None:
-        return doc
+        return ""
 
     # Save raw HTML
-    safe_name = doc["politician"].replace(" ", "_").replace(".", "")
+    safe_name = name.replace(" ", "_").replace(".", "")
     raw_path = RAW_DIR / "politician_profiles" / f"senator_{safe_name}.html"
     raw_path.parent.mkdir(parents=True, exist_ok=True)
-    raw_path.write_text(resp.text, encoding="utf-8")
+    raw_path.write_bytes(resp.content)
 
-    soup = BeautifulSoup(resp.text, "lxml")
+    soup = BeautifulSoup(resp.content, "lxml")
+    content = soup.find("div", class_="mw-parser-output")
+    if not content:
+        return ""
 
-    bio_div = (
-        soup.find("div", class_="senator-bio")
-        or soup.find("div", class_="profile-content")
-        or soup.find("div", id="senatorProfile")
-    )
-    if bio_div:
-        doc["text"] = bio_div.get_text(separator="\n", strip=True)
+    # Grab all top-level paragraphs up to the first h2 section heading
+    parts = []
+    for tag in content.children:
+        if tag.name == "h2":
+            break
+        if tag.name == "p":
+            text = tag.get_text(strip=True)
+            if text:
+                # Strip inline footnote markers like [1][2]
+                text = re.sub(r"\[\d+\]", "", text)
+                parts.append(text)
 
-    return doc
+    return "\n\n".join(parts)
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    # Quick smoke test — scrape first page of bills only
-    bills = scrape_bills(congress=19, max_pages=1)
-    print(f"Scraped {len(bills)} bills")
+    bills = scrape_bills(congress=20, max_items=5)
+    print(f"\nScraped {len(bills)} bills")
     if bills:
         print(bills[0]["title"])
+
+    senators = scrape_senators()
+    print(f"\nScraped {len(senators)} senators")
+    if senators:
+        print(senators[0]["title"])
+        print(senators[0]["text"][:200])
