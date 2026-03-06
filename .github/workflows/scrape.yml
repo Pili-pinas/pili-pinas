@@ -37,5 +37,5 @@ jobs:
           echo "Timed out waiting for scrape job"
           exit 1
         env:
-          API_URL: ${{ secrets.PILI_PINAS_API_URL }}
+          API_URL: ${{ vars.PILI_PINAS_API_URL }}
           API_KEY: ${{ secrets.PILI_PINAS_API_KEY }}

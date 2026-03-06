@@ -1,0 +1,15 @@
+name: Keepalive ping
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"  # every 5 minutes
+
+jobs:
+  ping:
+    name: Ping health endpoint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping
+        run: curl -sf "$API_URL/health" || echo "Server not reachable"
+        env:
+          API_URL: ${{ vars.PILI_PINAS_API_URL }}
