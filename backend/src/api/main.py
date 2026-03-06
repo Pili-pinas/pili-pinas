@@ -2,11 +2,13 @@
 Pili-Pinas FastAPI backend.
 
 Endpoints:
-    POST /query           — RAG query (main endpoint)
-    GET  /health          — health check
-    GET  /stats           — ChromaDB collection stats
-    POST /scrape          — trigger on-demand scrape job (async, returns job_id)
-    GET  /scrape/{job_id} — poll scrape job status
+    POST /query                — RAG query (main endpoint)
+    GET  /health               — health check
+    GET  /stats                — ChromaDB collection stats
+    POST /scrape               — trigger on-demand scrape job (async, returns job_id)
+    GET  /scrape/{job_id}      — poll scrape job status
+    GET  /messenger/webhook    — Meta webhook verification handshake
+    POST /messenger/webhook    — receive Messenger events
 
 Run:
     uvicorn backend.src.api.main:app --reload
@@ -78,6 +80,10 @@ _TAGS_METADATA = [
     {
         "name": "system",
         "description": "Health check and database statistics.",
+    },
+    {
+        "name": "messenger",
+        "description": "Facebook Messenger bot webhook — receives and replies to user messages via the RAG pipeline.",
     },
 ]
 
