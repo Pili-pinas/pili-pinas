@@ -9,6 +9,7 @@ jobs:
   ping:
     name: Ping health endpoint
     runs-on: ubuntu-latest
+    environment: production
     steps:
       - name: Ping
         run: curl -sf "$API_URL/health" || echo "Server not reachable"
