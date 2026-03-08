@@ -11,6 +11,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Debug env
+        run: echo "API_URL=${API_URL:+SET} len=${#API_URL}"
+        env:
+          API_URL: ${{ vars.PILI_PINAS_API_URL }}
+
       - name: Trigger scrape job
         run: |
           JOB=$(curl -sf -X POST "$API_URL/scrape" \

@@ -59,11 +59,19 @@ def verify_signature(body: bytes, signature: str) -> bool:
     if not META_APP_SECRET:
         return True
     if not signature.startswith("sha256="):
+        logger.warning(f"Signature missing sha256= prefix: {signature!r}")
         return False
     expected = "sha256=" + hmac.new(
         META_APP_SECRET.encode(), body, hashlib.sha256
     ).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    match = hmac.compare_digest(expected, signature)
+    if not match:
+        logger.warning(
+            f"Signature mismatch — secret_len={len(META_APP_SECRET)} "
+            f"body_len={len(body)} "
+            f"expected={expected[:20]}... received={signature[:20]}..."
+        )
+    return match
 
 
 def send_message(recipient_id: str, text: str) -> None:
