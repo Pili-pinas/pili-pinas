@@ -12,6 +12,16 @@ jobs:
     environment: production
 
     steps:
+      - name: Wake API
+        run: |
+          for i in 1 2 3; do
+            curl -sf "$API_URL/health" && break
+            echo "Waiting for machine to start... ($i)"
+            sleep 10
+          done
+        env:
+          API_URL: ${{ vars.PILI_PINAS_API_URL }}
+
       - name: Trigger scrape job
         run: |
           JOB=$(curl -sf -X POST "$API_URL/scrape" \
