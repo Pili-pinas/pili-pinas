@@ -100,7 +100,7 @@ def run_ingestion(
 
     if "senate_bills" in sources:
         logger.info("=== Senate Bills ===")
-        docs = scrape_senate_bills(congress=congress, max_pages=max_pages)
+        docs = scrape_senate_bills(congress=congress, max_items=max_pages)
         _process_and_save(docs, "senate_bills")
 
     if "senators" in sources:
@@ -110,12 +110,12 @@ def run_ingestion(
 
     if "gazette" in sources:
         logger.info("=== Official Gazette Laws ===")
-        docs = scrape_laws(max_pages=max_pages)
+        docs = scrape_laws(max_items=max_pages)
         _process_and_save(docs, "gazette_laws")
 
     if "house_bills" in sources:
         logger.info("=== House Bills ===")
-        docs = scrape_house_bills(congress=congress, max_pages=max_pages)
+        docs = scrape_house_bills(congress=congress, max_items=max_pages)
         _process_and_save(docs, "house_bills")
 
     if "house_members" in sources:
