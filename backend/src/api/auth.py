@@ -2,7 +2,7 @@
 API key authentication via external auth service.
 
 Validates X-API-Key headers against:
-    GET {AUTH_SERVICE_URL}/api/settings/validate-key
+    GET {AUTH_SERVICE_URL}/api/tokens/validate/{token}
 
 Set AUTH_SERVICE_URL in .env (defaults to the Vercel auth service).
 """
@@ -46,8 +46,7 @@ def verify_api_key(api_key: str = Security(_api_key_header)) -> str:
 
     try:
         resp = requests.get(
-            f"{AUTH_SERVICE_URL}/api/settings/validate-key",
-            headers={"X-API-Key": api_key},
+            f"{AUTH_SERVICE_URL}/api/tokens/validate/{api_key}",
             timeout=5,
         )
     except requests.RequestException as exc:
