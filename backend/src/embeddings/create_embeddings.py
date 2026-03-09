@@ -70,23 +70,18 @@ def embed_collection(jsonl_path: Path, model: SentenceTransformer, store: Vector
 
     logger.info(f"Embedding {len(docs)} chunks from {jsonl_path.name}")
 
-    # Generate embeddings in batches
-    texts = [d["text"] for d in docs]
-    all_embeddings = []
-
-    for i in tqdm(range(0, len(texts), BATCH_SIZE), desc=jsonl_path.stem):
-        batch = texts[i : i + BATCH_SIZE]
-        embeddings = model.encode(batch, normalize_embeddings=True).tolist()
-        all_embeddings.extend(embeddings)
-
-    ids = [doc_id(d, i) for i, d in enumerate(docs)]
-
-    store.upsert(
-        ids=ids,
-        embeddings=all_embeddings,
-        documents=texts,
-        metadatas=docs,
-    )
+    # Embed and upsert in batches to keep peak memory low
+    for i in tqdm(range(0, len(docs), BATCH_SIZE), desc=jsonl_path.stem):
+        batch_docs = docs[i : i + BATCH_SIZE]
+        batch_texts = [d["text"] for d in batch_docs]
+        batch_ids = [doc_id(d, i + j) for j, d in enumerate(batch_docs)]
+        embeddings = model.encode(batch_texts, normalize_embeddings=True).tolist()
+        store.upsert(
+            ids=batch_ids,
+            embeddings=embeddings,
+            documents=batch_texts,
+            metadatas=batch_docs,
+        )
 
     return len(docs)
 

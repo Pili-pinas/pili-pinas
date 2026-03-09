@@ -73,8 +73,10 @@ def scrape_house_bills(congress: int = 19, max_items: int = 100) -> list[dict]:
     documents = []
     cursor: Optional[str] = None
     page_size = min(50, max_items)
+    pages_fetched = 0
+    max_pages = max(max_items, 10)  # cap pages fetched to avoid infinite scan of null-title records
 
-    while len(documents) < max_items:
+    while len(documents) < max_items and pages_fetched < max_pages:
         params: dict = {"type": "HB", "congress": congress, "limit": page_size}
         if cursor:
             params["cursor"] = cursor
@@ -92,6 +94,8 @@ def scrape_house_bills(congress: int = 19, max_items: int = 100) -> list[dict]:
         if not payload.get("success"):
             logger.error(f"BetterGov API error: {payload}")
             break
+
+        pages_fetched += 1
 
         for bill in payload.get("data", []):
             if not bill.get("title"):

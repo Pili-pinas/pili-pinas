@@ -227,6 +227,29 @@ class TestScrapeHouseBills:
             docs = scrape_house_bills(congress=19)
         assert docs == []
 
+    def test_stops_after_scanning_too_many_null_title_records(self):
+        """When all pages have null titles and has_more=True, should not loop forever."""
+        null_page = {
+            "success": True,
+            "data": [
+                {**SAMPLE_HB, "title": None, "long_title": None},
+                {**SAMPLE_HB, "title": None, "long_title": None},
+            ],
+            "pagination": {"total": 9999, "limit": 2, "has_more": True, "next_cursor": "next"},
+        }
+        call_count = 0
+
+        def fake_get(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return _mock_response(null_page)
+
+        with patch("data_ingestion.scrapers.congress._get", side_effect=fake_get):
+            docs = scrape_house_bills(congress=20, max_items=5)
+
+        assert docs == []
+        assert call_count < 20  # must stop well before exhausting the full dataset
+
     def test_documents_have_required_fields(self):
         resp = _mock_response({**BETTERGOV_PAGE_1,
                                 "pagination": {**BETTERGOV_PAGE_1["pagination"], "has_more": False}})

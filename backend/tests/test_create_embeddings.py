@@ -148,6 +148,19 @@ class TestEmbedCollection:
         # encode should be called at least twice (one full batch + one partial)
         assert model.encode.call_count == 2
 
+    def test_upserts_per_batch_not_all_at_once(self, tmp_path):
+        """Each batch should be upserted immediately to avoid holding all embeddings in RAM."""
+        n = BATCH_SIZE + 5  # two batches
+        f = tmp_path / "big.jsonl"
+        docs = [{"text": f"T{i}", "url": f"https://x.com/p{i}", "chunk_index": i}
+                for i in range(n)]
+        f.write_text("\n".join(json.dumps(d) for d in docs))
+        model = _make_model()
+        store = MagicMock()
+        embed_collection(f, model, store)
+        # upsert should be called once per batch, not once for all data
+        assert store.upsert.call_count == 2
+
     def test_ids_are_unique_per_chunk(self, tmp_path):
         f = tmp_path / "docs.jsonl"
         docs = [{"text": f"Chunk {i}", "url": f"https://x.com/p{i}", "chunk_index": i}
