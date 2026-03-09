@@ -8,8 +8,9 @@ are mocked. The auth dependency is bypassed via app.dependency_overrides.
 import pytest
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
-from api.main import app, _jobs
+from api.main import app, _jobs, _run_scrape_job, ScrapeRequest
 from api.auth import verify_api_key
 from retrieval.rag_chain import RAGResult
 
@@ -233,3 +234,76 @@ class TestScrapeStatus:
         data = client.get("/scrape/failed-job").json()
         assert data["status"] == "failed"
         assert data["error"] == "Connection refused"
+
+
+# ---------------------------------------------------------------------------
+# _run_scrape_job (background task — called directly, not via HTTP)
+# ---------------------------------------------------------------------------
+
+class TestRunScrapeJob:
+    def _make_job(self):
+        job_id = "test-job-123"
+        _jobs[job_id] = {
+            "status": "pending",
+            "started_at": None,
+            "finished_at": None,
+            "stats": None,
+            "error": None,
+        }
+        return job_id
+
+    def _default_req(self, **kwargs):
+        return ScrapeRequest(**kwargs)
+
+    def test_sets_status_to_running_then_done(self):
+        job_id = self._make_job()
+        # run_ingestion/run_embedding_pipeline are lazy-imported inside _run_scrape_job
+        with patch("data_ingestion.ingestion.run_ingestion", return_value={"total_chunks": 5, "counts": {}}), \
+             patch("embeddings.create_embeddings.run_embedding_pipeline", return_value={}):
+            _run_scrape_job(job_id, self._default_req(embed=True))
+        assert _jobs[job_id]["status"] == "done"
+
+    def test_sets_started_at_and_finished_at(self):
+        job_id = self._make_job()
+        with patch("data_ingestion.ingestion.run_ingestion", return_value={"total_chunks": 0, "counts": {}}), \
+             patch("embeddings.create_embeddings.run_embedding_pipeline", return_value={}):
+            _run_scrape_job(job_id, self._default_req())
+        assert _jobs[job_id]["started_at"] is not None
+        assert _jobs[job_id]["finished_at"] is not None
+
+    def test_stores_ingestion_stats(self):
+        job_id = self._make_job()
+        ingest_stats = {"total_chunks": 42, "counts": {"news_articles": 42}}
+        with patch("data_ingestion.ingestion.run_ingestion", return_value=ingest_stats), \
+             patch("embeddings.create_embeddings.run_embedding_pipeline", return_value={}):
+            _run_scrape_job(job_id, self._default_req(embed=True))
+        assert _jobs[job_id]["stats"]["ingestion"]["total_chunks"] == 42
+
+    def test_stores_embedding_stats_when_embed_true(self):
+        job_id = self._make_job()
+        embed_stats = {"news_articles": 42}
+        with patch("data_ingestion.ingestion.run_ingestion", return_value={"total_chunks": 42, "counts": {}}), \
+             patch("embeddings.create_embeddings.run_embedding_pipeline", return_value=embed_stats):
+            _run_scrape_job(job_id, self._default_req(embed=True))
+        assert _jobs[job_id]["stats"]["embedding"] == embed_stats
+
+    def test_skips_embedding_when_embed_false(self):
+        job_id = self._make_job()
+        with patch("data_ingestion.ingestion.run_ingestion", return_value={"total_chunks": 0, "counts": {}}), \
+             patch("embeddings.create_embeddings.run_embedding_pipeline") as mock_embed:
+            _run_scrape_job(job_id, self._default_req(embed=False))
+        mock_embed.assert_not_called()
+        assert "embedding" not in (_jobs[job_id]["stats"] or {})
+
+    def test_sets_status_failed_on_ingestion_error(self):
+        job_id = self._make_job()
+        with patch("data_ingestion.ingestion.run_ingestion", side_effect=RuntimeError("DB error")):
+            _run_scrape_job(job_id, self._default_req())
+        assert _jobs[job_id]["status"] == "failed"
+        assert "DB error" in _jobs[job_id]["error"]
+
+    def test_still_sets_finished_at_on_failure(self):
+        job_id = self._make_job()
+        with patch("data_ingestion.ingestion.run_ingestion", side_effect=RuntimeError("crash")):
+            _run_scrape_job(job_id, self._default_req())
+        assert _jobs[job_id]["finished_at"] is not None
