@@ -37,8 +37,14 @@ jobs:
           # Poll until done (max 15 min)
           for i in $(seq 1 30); do
             sleep 30
-            STATUS=$(curl -s "$API_URL/scrape/$JOB_ID" -H "X-API-Key: $API_KEY")
-            echo "[$i] raw: $STATUS"
+            HTTP_CODE=$(curl -s -o /tmp/scrape_status.json -w "%{http_code}" \
+              "$API_URL/scrape/$JOB_ID" -H "X-API-Key: $API_KEY")
+            STATUS=$(cat /tmp/scrape_status.json)
+            echo "[$i] http=$HTTP_CODE raw: $STATUS"
+            if [[ "$HTTP_CODE" == "404" ]]; then
+              echo "Job not found (machine may have restarted) — failing"
+              exit 1
+            fi
             STATE=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "parse_error")
             echo "[$i] status: $STATE"
             if [[ "$STATE" == "done" ]]; then
