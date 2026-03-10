@@ -307,3 +307,14 @@ class TestRunScrapeJob:
         with patch("data_ingestion.ingestion.run_ingestion", side_effect=RuntimeError("crash")):
             _run_scrape_job(job_id, self._default_req())
         assert _jobs[job_id]["finished_at"] is not None
+
+    def test_embed_only_runs_on_scraped_collections(self):
+        """Embedding pipeline receives only the collections just scraped, not all historical data."""
+        job_id = self._make_job()
+        ingest_stats = {"total_chunks": 30, "counts": {"news_articles": 25, "senate_bills": 5}}
+        with patch("data_ingestion.ingestion.run_ingestion", return_value=ingest_stats), \
+             patch("embeddings.create_embeddings.run_embedding_pipeline") as mock_embed:
+            mock_embed.return_value = {}
+            _run_scrape_job(job_id, self._default_req(embed=True))
+        called_collections = set(mock_embed.call_args[1]["collections"])
+        assert called_collections == {"news_articles", "senate_bills"}

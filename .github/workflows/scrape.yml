@@ -34,8 +34,8 @@ jobs:
           echo "Job started: $JOB"
           JOB_ID=$(echo "$JOB" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
 
-          # Poll until done (max 15 min)
-          for i in $(seq 1 30); do
+          # Poll until done (max 30 min)
+          for i in $(seq 1 60); do
             sleep 30
             HTTP_CODE=$(curl -s -o /tmp/scrape_status.json -w "%{http_code}" \
               "$API_URL/scrape/$JOB_ID" -H "X-API-Key: $API_KEY")

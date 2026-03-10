@@ -378,7 +378,8 @@ def _run_scrape_job(job_id: str, req: ScrapeRequest) -> None:
 
         if req.embed:
             from embeddings.create_embeddings import run_embedding_pipeline
-            embed_stats = run_embedding_pipeline()
+            scraped_collections = list(ingest_stats["counts"].keys())
+            embed_stats = run_embedding_pipeline(collections=scraped_collections)
             _jobs[job_id]["stats"]["embedding"] = embed_stats
 
         _jobs[job_id]["status"] = "done"
