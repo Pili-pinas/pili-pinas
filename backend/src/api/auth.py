@@ -25,6 +25,9 @@ AUTH_SERVICE_URL = os.getenv(
 # Cache validated keys for this many seconds before re-checking the auth service.
 _CACHE_TTL = int(os.getenv("AUTH_CACHE_TTL", "86400"))  # default: 24 hours
 
+AUTH_MAX_RETRIES = 3
+_AUTH_TIMEOUT = 10  # seconds per attempt
+
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 # key → expiry timestamp (monotonic)
@@ -44,13 +47,21 @@ def verify_api_key(api_key: str = Security(_api_key_header)) -> str:
     if _valid_key_cache.get(api_key, 0) > now:
         return api_key
 
-    try:
-        resp = requests.get(
-            f"{AUTH_SERVICE_URL}/api/tokens/validate/{api_key}",
-            timeout=5,
-        )
-    except requests.RequestException as exc:
-        logger.error(f"Auth service unreachable: {exc}")
+    last_exc = None
+    for attempt in range(1, AUTH_MAX_RETRIES + 1):
+        try:
+            resp = requests.get(
+                f"{AUTH_SERVICE_URL}/api/tokens/validate/{api_key}",
+                timeout=_AUTH_TIMEOUT,
+            )
+            last_exc = None
+            break
+        except requests.RequestException as exc:
+            last_exc = exc
+            logger.warning(f"Auth service attempt {attempt}/{AUTH_MAX_RETRIES} failed: {exc}")
+
+    if last_exc is not None:
+        logger.error(f"Auth service unreachable after {AUTH_MAX_RETRIES} attempts: {last_exc}")
         raise HTTPException(
             status_code=503,
             detail="Authentication service unavailable. Try again shortly.",

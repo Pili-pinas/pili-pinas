@@ -38,7 +38,7 @@ def test_valid_key_returns_key():
     assert result == "good-token"
     mock_get.assert_called_once_with(
         f"{auth_module.AUTH_SERVICE_URL}/api/tokens/validate/good-token",
-        timeout=5,
+        timeout=auth_module._AUTH_TIMEOUT,
     )
 
 
@@ -114,3 +114,31 @@ def test_auth_service_unreachable_does_not_cache():
         with pytest.raises(HTTPException):
             verify_api_key("any-token")
     assert "any-token" not in auth_module._valid_key_cache
+
+
+def test_retries_on_timeout_and_succeeds():
+    """Succeeds on the third attempt after two timeouts."""
+    import requests as req
+    responses = [req.Timeout("slow"), req.Timeout("slow"), make_response(200)]
+    with patch("api.auth.requests.get", side_effect=responses) as mock_get:
+        result = verify_api_key("retry-token")
+    assert result == "retry-token"
+    assert mock_get.call_count == 3
+
+
+def test_retries_exhaust_raises_503():
+    """Raises 503 after all retry attempts fail."""
+    import requests as req
+    with patch("api.auth.requests.get", side_effect=req.Timeout("slow")) as mock_get:
+        with pytest.raises(HTTPException) as exc_info:
+            verify_api_key("retry-fail-token")
+    assert exc_info.value.status_code == 503
+    assert mock_get.call_count == auth_module.AUTH_MAX_RETRIES
+
+
+def test_no_retry_on_401():
+    """Auth rejection (401) should not be retried — it's not a transient error."""
+    with patch("api.auth.requests.get", return_value=make_response(401)) as mock_get:
+        with pytest.raises(HTTPException):
+            verify_api_key("bad-token")
+    assert mock_get.call_count == 1
