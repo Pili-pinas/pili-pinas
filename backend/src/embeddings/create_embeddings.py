@@ -17,25 +17,20 @@ from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
 from embeddings.base import VectorStore
+from embeddings.model import get_embedding_model
 from embeddings.vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
 
 PROCESSED_DIR = Path(__file__).parents[3] / "data" / "processed"
 
-# Multilingual model — handles both Filipino and English
-EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-
 # Batch size for embedding generation (tune based on RAM)
 BATCH_SIZE = 64
 
 
 def load_model() -> SentenceTransformer:
-    """Load the multilingual sentence transformer."""
-    logger.info(f"Loading embedding model: {EMBEDDING_MODEL}")
-    model = SentenceTransformer(EMBEDDING_MODEL)
-    logger.info("Model loaded.")
-    return model
+    """Return the shared embedding model singleton."""
+    return get_embedding_model()
 
 
 def doc_id(doc: dict, idx: int) -> str:

@@ -24,12 +24,12 @@ from typing import Optional
 from sentence_transformers import SentenceTransformer
 
 from embeddings.base import VectorStore
+from embeddings.model import get_embedding_model
 from embeddings.vector_store import get_vector_store
 from retrieval.prompts import RAG_SYSTEM_PROMPT, RAG_USER_PROMPT_TEMPLATE, NO_CONTEXT_RESPONSE
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_TOP_K = 5
 
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
@@ -48,14 +48,10 @@ class PiliPinasRAG:
 
     def __init__(self, top_k: int = DEFAULT_TOP_K):
         self.top_k = top_k
-        self._embedding_model: Optional[SentenceTransformer] = None
         self._store: Optional[VectorStore] = None
 
     def _get_embedding_model(self) -> SentenceTransformer:
-        if self._embedding_model is None:
-            logger.info(f"Loading embedding model: {EMBEDDING_MODEL}")
-            self._embedding_model = SentenceTransformer(EMBEDDING_MODEL)
-        return self._embedding_model
+        return get_embedding_model()
 
     def _get_store(self) -> VectorStore:
         if self._store is None:
