@@ -365,6 +365,7 @@ def query(req: QueryRequest):
       `"bill"` for legislation)
     - Increase `top_k` for complex questions that span multiple documents
     """
+    logger.info(f"Query received: question={req.question!r} source_type={req.source_type!r} top_k={req.top_k}")
     try:
         rag = get_rag()
         rag.top_k = req.top_k
@@ -374,6 +375,7 @@ def query(req: QueryRequest):
             source_type=req.source_type,
         )
 
+        logger.info(f"Query answered: chunks_used={result.chunks_used} sources={[s['source'] for s in result.sources]}")
         return QueryResponse(
             answer=result.answer,
             sources=[SourceDoc(**s) for s in result.sources],
