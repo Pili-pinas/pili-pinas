@@ -69,13 +69,20 @@ class PiliPinasRAG:
         Returns:
             List of chunk dicts with text + metadata.
         """
+        store = self._get_store()
+        doc_count = store.count()
+        if doc_count == 0:
+            logger.warning("Vector store is empty — no documents to retrieve. Run /scrape to ingest data.")
+            return []
+
+        n_results = min(self.top_k, doc_count)
         model = self._get_embedding_model()
         query_embedding = model.encode([question], normalize_embeddings=True).tolist()
 
         where = {"source_type": source_type} if source_type else None
-        results = self._get_store().query(
+        results = store.query(
             query_embeddings=query_embedding,
-            n_results=self.top_k,
+            n_results=n_results,
             where=where,
         )
 
@@ -139,7 +146,9 @@ class PiliPinasRAG:
 
         # Retrieve
         chunks = self.retrieve(question, source_type=source_type)
+        logger.info(f"Retrieved {len(chunks)} chunks — scores: {[round(c['score'], 3) for c in chunks]}")
         relevant = [c for c in chunks if c["score"] >= min_score]
+        logger.info(f"After min_score={min_score} filter: {len(relevant)} relevant chunks")
 
         if not relevant:
             logger.info("No relevant chunks found above threshold.")

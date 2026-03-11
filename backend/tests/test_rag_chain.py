@@ -132,18 +132,27 @@ class TestQuery:
         self.rag.retrieve.assert_called_once_with("question", source_type="news")
 
 
+def _make_retrieve_mocks(count: int, chroma_results: dict | None = None):
+    """Returns (rag, mock_model, mock_store) with configurable collection count."""
+    rag = PiliPinasRAG.__new__(PiliPinasRAG)
+    rag.top_k = 5
+    rag._embedding_model = None
+    rag._store = None
+
+    mock_model = MagicMock()
+    mock_model.encode.return_value = MagicMock(tolist=lambda: [[0.1, 0.2]])
+
+    mock_store = MagicMock()
+    mock_store.count.return_value = count
+    if chroma_results is not None:
+        mock_store.query.return_value = chroma_results
+
+    return rag, mock_model, mock_store
+
+
 class TestRetrieve:
     def test_converts_distance_to_similarity_score(self, mock_chroma_results):
-        rag = PiliPinasRAG.__new__(PiliPinasRAG)
-        rag.top_k = 5
-        rag._embedding_model = None
-        rag._store = None
-
-        mock_model = MagicMock()
-        mock_model.encode.return_value = MagicMock(tolist=lambda: [[0.1, 0.2]])
-
-        mock_store = MagicMock()
-        mock_store.query.return_value = mock_chroma_results
+        rag, mock_model, mock_store = _make_retrieve_mocks(count=10, chroma_results=mock_chroma_results)
 
         with patch.object(rag, "_get_embedding_model", return_value=mock_model), \
              patch.object(rag, "_get_store", return_value=mock_store):
@@ -164,6 +173,7 @@ class TestRetrieve:
         mock_model.encode.return_value = MagicMock(tolist=lambda: [[0.1]])
 
         mock_store = MagicMock()
+        mock_store.count.return_value = 10
         mock_store.query.return_value = {"documents": [[]], "metadatas": [[]], "distances": [[]]}
 
         with patch.object(rag, "_get_embedding_model", return_value=mock_model), \
@@ -171,6 +181,29 @@ class TestRetrieve:
             chunks = rag.retrieve("question")
 
         assert chunks == []
+
+    def test_returns_empty_when_collection_is_empty(self):
+        """No query should be issued when the collection has zero documents."""
+        rag, mock_model, mock_store = _make_retrieve_mocks(count=0)
+
+        with patch.object(rag, "_get_embedding_model", return_value=mock_model), \
+             patch.object(rag, "_get_store", return_value=mock_store):
+            chunks = rag.retrieve("question")
+
+        assert chunks == []
+        mock_store.query.assert_not_called()
+
+    def test_caps_n_results_to_collection_count(self, mock_chroma_results):
+        """When top_k > collection size, query uses the actual count to avoid ChromaDB error."""
+        rag, mock_model, mock_store = _make_retrieve_mocks(count=2, chroma_results=mock_chroma_results)
+        rag.top_k = 5  # more than count
+
+        with patch.object(rag, "_get_embedding_model", return_value=mock_model), \
+             patch.object(rag, "_get_store", return_value=mock_store):
+            rag.retrieve("question")
+
+        called_n = mock_store.query.call_args[1]["n_results"]
+        assert called_n == 2  # capped to collection count, not 5
 
 
 class TestGetRagSingleton:
