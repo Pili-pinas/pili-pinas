@@ -11,6 +11,7 @@ primary_region = 'sin'
 
 [env]
   VECTOR_STORE_BACKEND = 'chroma'
+  PROCESSED_DIR = '/app/vector_db/processed'
 
 [[mounts]]
   source = 'vector_db'

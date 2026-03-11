@@ -8,6 +8,7 @@ Run:
 
 import json
 import logging
+import os
 import sys
 import argparse
 from datetime import datetime
@@ -25,9 +26,10 @@ from data_ingestion.processors.html_processor import process_html_document
 
 logger = logging.getLogger(__name__)
 
-PROCESSED_DIR = Path(__file__).parents[3] / "data" / "processed"
-METADATA_FILE = Path(__file__).parents[3] / "data" / "metadata.json"
-FAILED_LOG = Path(__file__).parents[3] / "data" / "failed_urls.log"
+_DEFAULT_PROCESSED_DIR = Path(__file__).parents[3] / "data" / "processed"
+PROCESSED_DIR = Path(os.getenv("PROCESSED_DIR", str(_DEFAULT_PROCESSED_DIR)))
+METADATA_FILE = PROCESSED_DIR.parent / "metadata.json"
+FAILED_LOG = PROCESSED_DIR.parent / "failed_urls.log"
 
 
 def save_documents(docs: list[dict], collection: str) -> Path:

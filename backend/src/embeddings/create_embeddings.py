@@ -10,6 +10,7 @@ Run:
 import json
 import logging
 import hashlib
+import os
 import argparse
 from pathlib import Path
 
@@ -22,7 +23,8 @@ from embeddings.vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
 
-PROCESSED_DIR = Path(__file__).parents[3] / "data" / "processed"
+_DEFAULT_PROCESSED_DIR = Path(__file__).parents[3] / "data" / "processed"
+PROCESSED_DIR = Path(os.getenv("PROCESSED_DIR", str(_DEFAULT_PROCESSED_DIR)))
 
 # Batch size for embedding generation (tune based on RAM)
 BATCH_SIZE = 64
