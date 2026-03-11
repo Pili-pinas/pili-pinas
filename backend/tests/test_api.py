@@ -49,6 +49,18 @@ def _mock_rag(answer="Test answer.", sources=None):
     return mock
 
 
+def _mock_rag_no_answer():
+    """RAG mock that returns no chunks (question cannot be answered)."""
+    mock = MagicMock()
+    mock.query.return_value = RAGResult(
+        answer="Hindi ako makahanap...",
+        sources=[],
+        query="test question",
+        chunks_used=0,
+    )
+    return mock
+
+
 class TestHealth:
     def test_returns_200(self):
         assert client.get("/health").status_code == 200
@@ -127,6 +139,30 @@ class TestQuery:
         with patch("api.main.get_rag", return_value=mock_rag):
             resp = client.post("/query", json={"question": "Test question here"})
         assert resp.status_code == 500
+
+    def test_unanswered_question_is_logged(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        with patch("api.main.get_rag", return_value=_mock_rag_no_answer()):
+            client.post("/query", json={"question": "Sino si Leni Robredo?"})
+        resp = client.get("/unanswered")
+        assert resp.status_code == 200
+        rows = resp.json()["questions"]
+        assert len(rows) == 1
+        assert rows[0]["question"] == "Sino si Leni Robredo?"
+
+    def test_answered_question_is_not_logged(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        with patch("api.main.get_rag", return_value=_mock_rag()):
+            client.post("/query", json={"question": "What bills were passed?"})
+        resp = client.get("/unanswered")
+        assert resp.json()["questions"] == []
+
+    def test_unanswered_logs_source_type(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        with patch("api.main.get_rag", return_value=_mock_rag_no_answer()):
+            client.post("/query", json={"question": "Ano ang SALN ni Marcos?", "source_type": "saln"})
+        rows = client.get("/unanswered").json()["questions"]
+        assert rows[0]["source_type"] == "saln"
 
 
 class TestScrape:

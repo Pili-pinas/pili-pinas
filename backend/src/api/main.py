@@ -16,6 +16,7 @@ Run:
 
 import json
 import logging
+import sqlite3
 import sys
 import uuid
 from datetime import datetime
@@ -112,6 +113,36 @@ app.add_middleware(
 )
 
 app.include_router(messenger_router, prefix="/messenger", tags=["messenger"])
+
+
+# ── Unanswered questions (persisted to the mounted volume) ───────────────────
+
+UNANSWERED_DB = VECTOR_DB_DIR / "unanswered.db"
+
+
+def _init_unanswered_db() -> None:
+    UNANSWERED_DB.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(UNANSWERED_DB) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS unanswered_questions (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                asked_at TEXT    NOT NULL,
+                question TEXT    NOT NULL,
+                source_type TEXT
+            )
+        """)
+
+
+def _log_unanswered(question: str, source_type: str | None) -> None:
+    try:
+        _init_unanswered_db()
+        with sqlite3.connect(UNANSWERED_DB) as conn:
+            conn.execute(
+                "INSERT INTO unanswered_questions (asked_at, question, source_type) VALUES (?, ?, ?)",
+                (datetime.now().isoformat(), question, source_type),
+            )
+    except Exception:
+        logger.exception("Failed to log unanswered question")
 
 
 # ── Scrape progress (persisted to the mounted volume) ────────────────────────
@@ -333,6 +364,27 @@ def stats():
         raise HTTPException(status_code=500, detail=f"Could not fetch stats: {e}")
 
 
+@app.get(
+    "/unanswered",
+    tags=["system"],
+    summary="Questions that could not be answered",
+    response_description="List of questions with no matching documents in the database.",
+    dependencies=[Depends(verify_api_key)],
+)
+def unanswered():
+    """Returns questions that returned zero chunks — useful for identifying gaps in the dataset."""
+    try:
+        _init_unanswered_db()
+        with sqlite3.connect(UNANSWERED_DB) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT id, asked_at, question, source_type FROM unanswered_questions ORDER BY asked_at DESC"
+            ).fetchall()
+        return {"questions": [dict(r) for r in rows]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not fetch unanswered questions: {e}")
+
+
 @app.post(
     "/query",
     tags=["query"],
@@ -375,6 +427,9 @@ def query(req: QueryRequest):
             source_type=req.source_type,
         )
 
+        if result.chunks_used == 0:
+            logger.info(f"No relevant chunks found — logging unanswered question: {req.question!r}")
+            _log_unanswered(req.question, req.source_type)
         logger.info(f"Query answered: chunks_used={result.chunks_used} sources={[s['source'] for s in result.sources]}")
         return QueryResponse(
             answer=result.answer,
