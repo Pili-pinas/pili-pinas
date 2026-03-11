@@ -27,36 +27,60 @@ jobs:
 
       - name: Trigger scrape job
         run: |
-          JOB=$(curl -sf -X POST "$API_URL/scrape" \
-            -H "Content-Type: application/json" \
-            -H "X-API-Key: $API_KEY" \
-            -d '{"sources": ["news", "senate_bills", "senators"], "max_news": 30, "embed": true}')
+          _trigger_job() {
+            local resume="$1"
+            curl -sf -X POST "$API_URL/scrape" \
+              -H "Content-Type: application/json" \
+              -H "X-API-Key: $API_KEY" \
+              -d "{\"sources\": [\"news\", \"senate_bills\", \"senators\"], \"max_news\": 30, \"embed\": true, \"resume\": $resume}"
+          }
+
+          _poll_job() {
+            local job_id="$1"
+            # Poll until done (max 30 min)
+            for i in $(seq 1 60); do
+              sleep 30
+              HTTP_CODE=$(curl -s -o /tmp/scrape_status.json -w "%{http_code}" \
+                "$API_URL/scrape/$job_id" -H "X-API-Key: $API_KEY")
+              STATUS=$(cat /tmp/scrape_status.json)
+              echo "[$i] http=$HTTP_CODE raw: $STATUS"
+              if [[ "$HTTP_CODE" == "404" ]]; then
+                echo "Job not found (machine restarted) — will resume"
+                return 2
+              fi
+              STATE=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "parse_error")
+              echo "[$i] status: $STATE"
+              if [[ "$STATE" == "done" ]]; then
+                echo "$STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print('chunks:', d.get('stats',{}))"
+                return 0
+              elif [[ "$STATE" == "failed" ]]; then
+                echo "Scrape job failed: $STATUS"
+                return 1
+              fi
+            done
+            echo "Timed out waiting for scrape job"
+            return 1
+          }
+
+          # First attempt
+          JOB=$(_trigger_job false)
           echo "Job started: $JOB"
           JOB_ID=$(echo "$JOB" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
+          _poll_job "$JOB_ID"
+          POLL_RC=$?
 
-          # Poll until done (max 30 min)
-          for i in $(seq 1 60); do
+          # If machine restarted (404), retry once with resume=true
+          if [[ "$POLL_RC" == "2" ]]; then
+            echo "Retrying with resume=true after machine restart..."
             sleep 30
-            HTTP_CODE=$(curl -s -o /tmp/scrape_status.json -w "%{http_code}" \
-              "$API_URL/scrape/$JOB_ID" -H "X-API-Key: $API_KEY")
-            STATUS=$(cat /tmp/scrape_status.json)
-            echo "[$i] http=$HTTP_CODE raw: $STATUS"
-            if [[ "$HTTP_CODE" == "404" ]]; then
-              echo "Job not found (machine may have restarted) — failing"
-              exit 1
-            fi
-            STATE=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "parse_error")
-            echo "[$i] status: $STATE"
-            if [[ "$STATE" == "done" ]]; then
-              echo "$STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print('chunks:', d.get('stats',{}))"
-              exit 0
-            elif [[ "$STATE" == "failed" ]]; then
-              echo "Scrape job failed: $STATUS"
-              exit 1
-            fi
-          done
-          echo "Timed out waiting for scrape job"
-          exit 1
+            JOB=$(_trigger_job true)
+            echo "Resume job started: $JOB"
+            JOB_ID=$(echo "$JOB" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
+            _poll_job "$JOB_ID"
+            POLL_RC=$?
+          fi
+
+          exit $POLL_RC
         env:
           API_URL: ${{ vars.PILI_PINAS_API_URL }}
           API_KEY: ${{ secrets.PILI_PINAS_API_KEY }}

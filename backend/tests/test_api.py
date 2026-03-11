@@ -5,11 +5,13 @@ Uses FastAPI's TestClient. Heavy dependencies (RAG, vector store, scrapers)
 are mocked. The auth dependency is bypassed via app.dependency_overrides.
 """
 
+import json
 import pytest
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+import api.main as main_module
 from api.main import app, _jobs, _run_scrape_job, ScrapeRequest
 from api.auth import verify_api_key
 from retrieval.rag_chain import RAGResult
@@ -318,3 +320,59 @@ class TestRunScrapeJob:
             _run_scrape_job(job_id, self._default_req(embed=True))
         called_collections = set(mock_embed.call_args[1]["collections"])
         assert called_collections == {"news_articles", "senate_bills"}
+
+    # ── Checkpoint / resume ──────────────────────────────────────────────────
+
+    def test_checkpoints_sources_done_after_each_source(self, tmp_path, monkeypatch):
+        """Progress file is updated after each source is scraped."""
+        monkeypatch.setattr(main_module, "PROGRESS_FILE", tmp_path / "progress.json")
+        job_id = self._make_job()
+
+        def per_source_ingest(sources, **kwargs):
+            return {"counts": {f"{sources[0]}_collection": 5}, "total_chunks": 5}
+
+        with patch("data_ingestion.ingestion.run_ingestion", side_effect=per_source_ingest), \
+             patch("embeddings.create_embeddings.run_embedding_pipeline", return_value={}):
+            _run_scrape_job(job_id, ScrapeRequest(sources=["news", "senate_bills"], embed=False))
+
+        progress = json.loads((tmp_path / "progress.json").read_text())
+        assert set(progress["sources_done"]) == {"news", "senate_bills"}
+        assert progress["status"] == "done"
+
+    def test_resume_skips_completed_sources(self, tmp_path, monkeypatch):
+        """With resume=True, sources already in progress file are not re-scraped."""
+        progress_file = tmp_path / "progress.json"
+        monkeypatch.setattr(main_module, "PROGRESS_FILE", progress_file)
+        progress_file.write_text(json.dumps({
+            "job_id": "old-job",
+            "sources_requested": ["news", "senate_bills"],
+            "sources_done": ["news"],
+            "status": "running",
+        }))
+
+        job_id = self._make_job()
+        with patch("data_ingestion.ingestion.run_ingestion",
+                   return_value={"counts": {"senate_bills": 3}, "total_chunks": 3}) as mock_ingest, \
+             patch("embeddings.create_embeddings.run_embedding_pipeline", return_value={}):
+            _run_scrape_job(job_id, ScrapeRequest(sources=["news", "senate_bills"], resume=True, embed=False))
+
+        # run_ingestion called only once — for senate_bills, not news
+        assert mock_ingest.call_count == 1
+        assert mock_ingest.call_args[1]["sources"] == ["senate_bills"]
+
+    def test_resume_false_ignores_existing_progress(self, tmp_path, monkeypatch):
+        """Without resume=True, a fresh run always scrapes all requested sources."""
+        progress_file = tmp_path / "progress.json"
+        monkeypatch.setattr(main_module, "PROGRESS_FILE", progress_file)
+        progress_file.write_text(json.dumps({
+            "sources_done": ["news", "senate_bills"],
+            "status": "running",
+        }))
+
+        job_id = self._make_job()
+        with patch("data_ingestion.ingestion.run_ingestion",
+                   return_value={"counts": {"news_articles": 5}, "total_chunks": 5}) as mock_ingest, \
+             patch("embeddings.create_embeddings.run_embedding_pipeline", return_value={}):
+            _run_scrape_job(job_id, ScrapeRequest(sources=["news", "senate_bills"], resume=False, embed=False))
+
+        assert mock_ingest.call_count == 2  # both sources scraped from scratch

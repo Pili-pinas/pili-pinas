@@ -14,6 +14,7 @@ Run:
     uvicorn backend.src.api.main:app --reload
 """
 
+import json
 import logging
 import sys
 import uuid
@@ -28,7 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 from retrieval.rag_chain import get_rag
-from embeddings.vector_store import get_vector_store
+from embeddings.vector_store import get_vector_store, VECTOR_DB_DIR
 from api.auth import verify_api_key
 from api.messenger import messenger_router
 
@@ -111,6 +112,23 @@ app.add_middleware(
 )
 
 app.include_router(messenger_router, prefix="/messenger", tags=["messenger"])
+
+
+# ── Scrape progress (persisted to the mounted volume) ────────────────────────
+
+PROGRESS_FILE = VECTOR_DB_DIR / "scrape_progress.json"
+
+
+def _load_progress() -> dict | None:
+    try:
+        return json.loads(PROGRESS_FILE.read_text())
+    except Exception:
+        return None
+
+
+def _save_progress(data: dict) -> None:
+    PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PROGRESS_FILE.write_text(json.dumps(data, indent=2))
 
 
 # ── In-memory job store ───────────────────────────────────────────────────────
@@ -241,6 +259,13 @@ class ScrapeRequest(BaseModel):
             "so new documents are immediately searchable."
         ),
     )
+    resume: bool = Field(
+        False,
+        description=(
+            "If `true`, resumes a previously interrupted scrape job by skipping "
+            "sources that were already completed in the last run."
+        ),
+    )
 
 
 class ScrapeJobStatus(BaseModel):
@@ -363,30 +388,73 @@ def query(req: QueryRequest):
 # ── Scrape background task ────────────────────────────────────────────────────
 
 def _run_scrape_job(job_id: str, req: ScrapeRequest) -> None:
-    """Background task: run ingestion then optionally build embeddings."""
+    """Background task: run ingestion source-by-source (checkpointed) then embed."""
+    from data_ingestion.ingestion import run_ingestion
+    from embeddings.create_embeddings import run_embedding_pipeline
+
+    sources = req.sources or list(VALID_SOURCES)
+
+    # Load prior progress when resuming
+    sources_done: set[str] = set()
+    if req.resume:
+        prev = _load_progress()
+        if prev and prev.get("status") == "running":
+            sources_done = set(prev.get("sources_done", []))
+            logger.info(f"Resuming scrape, skipping already-done sources: {sources_done}")
+
     _jobs[job_id]["status"] = "running"
     _jobs[job_id]["started_at"] = datetime.now().isoformat()
+
+    progress = {
+        "job_id": job_id,
+        "started_at": _jobs[job_id]["started_at"],
+        "sources_requested": sources,
+        "sources_done": list(sources_done),
+        "status": "running",
+    }
+    _save_progress(progress)
+
     try:
-        from data_ingestion.ingestion import run_ingestion
-        ingest_stats = run_ingestion(
-            sources=req.sources,
-            congress=req.congress,
-            max_pages=req.max_pages,
-            max_news=req.max_news,
-        )
+        all_counts: dict[str, int] = {}
+
+        for source in sources:
+            if source in sources_done:
+                logger.info(f"Skipping already-completed source: {source}")
+                continue
+
+            stats = run_ingestion(
+                sources=[source],
+                congress=req.congress,
+                max_pages=req.max_pages,
+                max_news=req.max_news,
+            )
+            all_counts.update(stats.get("counts", {}))
+
+            sources_done.add(source)
+            progress["sources_done"] = list(sources_done)
+            _save_progress(progress)
+
+        ingest_stats = {
+            "sources": sources,
+            "counts": all_counts,
+            "total_chunks": sum(all_counts.values()),
+        }
         _jobs[job_id]["stats"] = {"ingestion": ingest_stats}
 
         if req.embed:
-            from embeddings.create_embeddings import run_embedding_pipeline
-            scraped_collections = list(ingest_stats["counts"].keys())
+            scraped_collections = list(all_counts.keys())
             embed_stats = run_embedding_pipeline(collections=scraped_collections)
             _jobs[job_id]["stats"]["embedding"] = embed_stats
 
         _jobs[job_id]["status"] = "done"
+        progress["status"] = "done"
+        _save_progress(progress)
     except Exception as e:
         logger.exception(f"Scrape job {job_id} failed: {e}")
         _jobs[job_id]["status"] = "failed"
         _jobs[job_id]["error"] = str(e)
+        progress["status"] = "failed"
+        _save_progress(progress)
     finally:
         _jobs[job_id]["finished_at"] = datetime.now().isoformat()
 
