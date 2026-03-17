@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Run the historical backfill locally.
-# Scrapes Congress 17-20 for bills, COMELEC 2016/2019/2022/2025, and 1000 laws.
+# Scrapes Congress 17-20 for bills, COMELEC 2016/2019/2022/2025, and all laws.
 #
 # Usage:
-#   ./scripts/backfill.sh                   # full backfill (all sources)
-#   ./scripts/backfill.sh senate_bills      # single source
-#   ./scripts/backfill.sh senate_bills gazette  # multiple sources
+#   ./scripts/backfill.sh              # default: 1000 laws
+#   ./scripts/backfill.sh 5000         # custom max laws
 
 set -euo pipefail
 
@@ -14,21 +13,20 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$REPO_ROOT"
 
-SOURCES="${*:-senate_bills senators gazette house_bills house_members comelec}"
+MAX_LAWS="${1:-1000}"
 
 echo "=== Pili-Pinas Historical Backfill ==="
-echo "Sources  : $SOURCES"
+echo "Sources  : senate_bills senators gazette house_bills house_members comelec"
 echo "Congresses: 17 18 19 20"
 echo "Elections : 2016 2019 2022 2025"
 echo "Max bills : 500 per congress"
-echo "Max laws  : 1000"
+echo "Max laws  : $MAX_LAWS"
 echo ""
 
-# shellcheck disable=SC2086
 python backend/src/data_ingestion/ingestion.py \
-  --sources $SOURCES \
+  --sources senate_bills senators gazette house_bills house_members comelec \
   --congresses 17 18 19 20 \
   --election-years 2016 2019 2022 2025 \
   --max-pages 500 \
-  --max-laws 1000 \
+  --max-laws "$MAX_LAWS" \
   --max-news 20
