@@ -279,6 +279,36 @@ class TestScrapeStatus:
 # _run_scrape_job (background task — called directly, not via HTTP)
 # ---------------------------------------------------------------------------
 
+class TestClearCache:
+    def test_returns_200(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
+        assert client.delete("/cache").status_code == 200
+
+    def test_clears_all_cached_entries(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        mock_rag = _mock_rag("Answer.")
+        with patch("api.main.get_rag", return_value=mock_rag):
+            client.post("/query", json={"question": "Who is the president?"})
+        assert mock_rag.query.call_count == 1
+
+        client.delete("/cache")
+
+        with patch("api.main.get_rag", return_value=mock_rag):
+            client.post("/query", json={"question": "Who is the president?"})
+        assert mock_rag.query.call_count == 2  # cache was empty, RAG called again
+
+    def test_returns_deleted_count(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        mock_rag = _mock_rag("Answer.")
+        with patch("api.main.get_rag", return_value=mock_rag):
+            client.post("/query", json={"question": "Who is the president?"})
+            client.post("/query", json={"question": "What is the capital?"})
+        data = client.delete("/cache").json()
+        assert data["deleted"] == 2
+
+
 class TestQueryCache:
     def test_cache_hit_skips_rag_call(self, tmp_path, monkeypatch):
         """Second identical question returns cached answer without calling RAG."""

@@ -206,6 +206,16 @@ class TestRetrieve:
         assert called_n == 2  # capped to collection count, not 5
 
 
+class TestCallLlm:
+    def test_raises_on_api_error(self):
+        """_call_llm must propagate API failures — never swallow them into an error string."""
+        rag = PiliPinasRAG.__new__(PiliPinasRAG)
+        with patch("anthropic.Anthropic") as mock_cls:
+            mock_cls.return_value.messages.create.side_effect = Exception("Auth error")
+            with pytest.raises(Exception, match="Auth error"):
+                rag._call_llm("system prompt", "user prompt")
+
+
 class TestGetRagSingleton:
     def test_returns_same_instance_on_repeated_calls(self):
         # Reset singleton first
