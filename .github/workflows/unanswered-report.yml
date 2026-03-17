@@ -100,6 +100,7 @@ jobs:
         with:
           server_address: ${{ secrets.MAIL_SERVER }}
           server_port: ${{ vars.MAIL_PORT || 587 }}
+          secure: true
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }}
           subject: "Pili-Pinas: ${{ env.REPORT_TOTAL }} unanswered questions"
