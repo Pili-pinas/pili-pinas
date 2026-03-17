@@ -111,19 +111,15 @@ class PiliPinasRAG:
 
     def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
         """Call Claude Haiku via the Anthropic API."""
-        try:
-            import anthropic
-            client = anthropic.Anthropic()
-            message = client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=1024,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-            )
-            return message.content[0].text
-        except Exception as e:
-            logger.error(f"Claude API call failed: {e}")
-            return f"Error calling Claude API: {e}"
+        import anthropic
+        client = anthropic.Anthropic()
+        message = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=1024,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        return message.content[0].text
 
     def query(
         self,

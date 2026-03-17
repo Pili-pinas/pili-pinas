@@ -209,9 +209,12 @@ class TestRetrieve:
 class TestCallLlm:
     def test_raises_on_api_error(self):
         """_call_llm must propagate API failures — never swallow them into an error string."""
+        import sys
+        from unittest.mock import MagicMock
         rag = PiliPinasRAG.__new__(PiliPinasRAG)
-        with patch("anthropic.Anthropic") as mock_cls:
-            mock_cls.return_value.messages.create.side_effect = Exception("Auth error")
+        mock_anthropic = MagicMock()
+        mock_anthropic.Anthropic.return_value.messages.create.side_effect = Exception("Auth error")
+        with patch.dict(sys.modules, {"anthropic": mock_anthropic}):
             with pytest.raises(Exception, match="Auth error"):
                 rag._call_llm("system prompt", "user prompt")
 

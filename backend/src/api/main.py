@@ -467,6 +467,25 @@ def unanswered():
         raise HTTPException(status_code=500, detail=f"Could not fetch unanswered questions: {e}")
 
 
+@app.delete(
+    "/cache",
+    tags=["system"],
+    summary="Clear the query cache",
+    response_description="Number of cache entries deleted.",
+    dependencies=[Depends(verify_api_key)],
+)
+def clear_cache():
+    """Deletes all cached query responses. Useful after fixing bad cached answers."""
+    try:
+        _init_cache_db()
+        with sqlite3.connect(QUERY_CACHE_DB) as conn:
+            deleted = conn.execute("DELETE FROM query_cache").rowcount
+        logger.info(f"Cache manually cleared: {deleted} entries removed")
+        return {"deleted": deleted}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not clear cache: {e}")
+
+
 @app.post(
     "/query",
     tags=["query"],
