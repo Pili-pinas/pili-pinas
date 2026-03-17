@@ -384,23 +384,39 @@ class ScrapeRequest(BaseModel):
             "`house_bills`, `house_members`, `comelec`, `news`."
         ),
     )
-    congress: int = Field(
-        19,
-        ge=17,
-        le=25,
-        description="Philippine Congress number to use for bill scrapers (e.g. 19 = 19th Congress).",
+    congresses: list[int] | None = Field(
+        None,
+        description=(
+            "Congress numbers to scrape for bill sources. "
+            "Defaults to current congress (20). "
+            "Pass multiple for a backfill, e.g. `[17, 18, 19, 20]`."
+        ),
+    )
+    election_years: list[int] | None = Field(
+        None,
+        description=(
+            "Election years to scrape for COMELEC. "
+            "Defaults to current year (2025). "
+            "Pass multiple for a backfill, e.g. `[2016, 2019, 2022, 2025]`."
+        ),
     )
     max_pages: int = Field(
         3,
         ge=1,
-        le=20,
-        description="Maximum pages to scrape per government source.",
+        le=2000,
+        description="Maximum items to scrape per congress session for bill scrapers.",
     )
     max_news: int = Field(
         20,
         ge=1,
         le=200,
         description="Maximum articles to fetch per news source.",
+    )
+    max_laws: int = Field(
+        50,
+        ge=1,
+        le=5000,
+        description="Maximum laws to fetch from the Official Gazette.",
     )
     embed: bool = Field(
         True,
@@ -634,9 +650,11 @@ def _run_scrape_job(job_id: str, req: ScrapeRequest) -> None:
 
             stats = run_ingestion(
                 sources=[source],
-                congress=req.congress,
+                congresses=req.congresses,
+                election_years=req.election_years,
                 max_pages=req.max_pages,
                 max_news=req.max_news,
+                max_laws=req.max_laws,
             )
             all_counts.update(stats.get("counts", {}))
 

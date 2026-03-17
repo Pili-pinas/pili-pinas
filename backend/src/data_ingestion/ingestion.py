@@ -31,6 +31,10 @@ PROCESSED_DIR = Path(os.getenv("PROCESSED_DIR", str(_DEFAULT_PROCESSED_DIR)))
 METADATA_FILE = PROCESSED_DIR.parent / "metadata.json"
 FAILED_LOG = PROCESSED_DIR.parent / "failed_urls.log"
 
+# Default congress/year values for daily scrape
+_CURRENT_CONGRESS = 20
+_CURRENT_ELECTION_YEAR = 2025
+
 
 def save_documents(docs: list[dict], collection: str) -> Path:
     """Save processed document chunks to a JSONL file."""
@@ -62,9 +66,11 @@ def update_metadata(stats: dict) -> None:
 
 def run_ingestion(
     sources: list[str] | None = None,
-    congress: int = 19,
+    congresses: list[int] | None = None,
+    election_years: list[int] | None = None,
     max_pages: int = 3,
     max_news: int = 20,
+    max_laws: int = 50,
 ) -> dict:
     """
     Run the full ingestion pipeline.
@@ -73,9 +79,13 @@ def run_ingestion(
         sources: Which sources to ingest. None = all.
                  Options: senate_bills, senators, gazette, house_bills,
                           house_members, comelec, news
-        congress: Congress number for bill scrapers.
-        max_pages: Max pages to scrape per source.
+        congresses: Congress numbers to scrape for bills (e.g. [18, 19, 20]).
+                    None defaults to [current congress]. Pass multiple for backfill.
+        election_years: Election years to scrape for COMELEC (e.g. [2019, 2022, 2025]).
+                        None defaults to [current year].
+        max_pages: Max items per congress session for bill scrapers.
         max_news: Max articles per news source.
+        max_laws: Max laws to fetch from the Official Gazette.
 
     Returns:
         Stats dict with counts per collection.
@@ -85,6 +95,8 @@ def run_ingestion(
         "house_bills", "house_members", "comelec", "news"
     ]
     sources = sources or all_sources
+    congresses = congresses or [_CURRENT_CONGRESS]
+    election_years = election_years or [_CURRENT_ELECTION_YEAR]
     stats = {"sources": sources, "counts": {}}
 
     def _process_and_save(raw_docs: list[dict], collection: str) -> int:
@@ -101,9 +113,12 @@ def run_ingestion(
         return len(chunks)
 
     if "senate_bills" in sources:
-        logger.info("=== Senate Bills ===")
-        docs = scrape_senate_bills(congress=congress, max_items=max_pages)
-        _process_and_save(docs, "senate_bills")
+        logger.info(f"=== Senate Bills (congresses={congresses}) ===")
+        all_docs = []
+        for c in congresses:
+            logger.info(f"Scraping Senate bills — Congress {c}")
+            all_docs.extend(scrape_senate_bills(congress=c, max_items=max_pages))
+        _process_and_save(all_docs, "senate_bills")
 
     if "senators" in sources:
         logger.info("=== Senator Profiles ===")
@@ -111,14 +126,17 @@ def run_ingestion(
         _process_and_save(docs, "senators")
 
     if "gazette" in sources:
-        logger.info("=== Official Gazette Laws ===")
-        docs = scrape_laws(max_items=max_pages)
+        logger.info(f"=== Official Gazette Laws (max_laws={max_laws}) ===")
+        docs = scrape_laws(max_items=max_laws)
         _process_and_save(docs, "gazette_laws")
 
     if "house_bills" in sources:
-        logger.info("=== House Bills ===")
-        docs = scrape_house_bills(congress=congress, max_items=max_pages)
-        _process_and_save(docs, "house_bills")
+        logger.info(f"=== House Bills (congresses={congresses}) ===")
+        all_docs = []
+        for c in congresses:
+            logger.info(f"Scraping House bills — Congress {c}")
+            all_docs.extend(scrape_house_bills(congress=c, max_items=max_pages))
+        _process_and_save(all_docs, "house_bills")
 
     if "house_members" in sources:
         logger.info("=== House Members ===")
@@ -126,12 +144,14 @@ def run_ingestion(
         _process_and_save(docs, "house_members")
 
     if "comelec" in sources:
-        logger.info("=== COMELEC (candidates + resolutions) ===")
-        # scrape_all_comelec returns pre-chunked PDF docs — save directly
-        docs = scrape_all_comelec(election_year=2025, max_resolutions=30)
-        if docs:
-            save_documents(docs, "comelec")
-        stats["counts"]["comelec"] = len(docs)
+        logger.info(f"=== COMELEC (election_years={election_years}) ===")
+        all_docs = []
+        for year in election_years:
+            logger.info(f"Scraping COMELEC — {year}")
+            all_docs.extend(scrape_all_comelec(election_year=year, max_resolutions=30))
+        if all_docs:
+            save_documents(all_docs, "comelec")
+        stats["counts"]["comelec"] = len(all_docs)
 
     if "news" in sources:
         logger.info("=== News Articles ===")
@@ -162,15 +182,21 @@ if __name__ == "__main__":
                  "house_members", "comelec", "news"],
         help="Sources to ingest (default: all)"
     )
-    parser.add_argument("--congress", type=int, default=19)
+    parser.add_argument("--congresses", nargs="+", type=int, default=None,
+                        help="Congress numbers to scrape (default: current congress)")
+    parser.add_argument("--election-years", nargs="+", type=int, default=None,
+                        help="Election years for COMELEC (default: current year)")
     parser.add_argument("--max-pages", type=int, default=3)
     parser.add_argument("--max-news", type=int, default=20)
+    parser.add_argument("--max-laws", type=int, default=50)
     args = parser.parse_args()
 
     stats = run_ingestion(
         sources=args.sources,
-        congress=args.congress,
+        congresses=args.congresses,
+        election_years=args.election_years,
         max_pages=args.max_pages,
         max_news=args.max_news,
+        max_laws=args.max_laws,
     )
     print(f"\nDone. Total chunks: {stats['total_chunks']}")

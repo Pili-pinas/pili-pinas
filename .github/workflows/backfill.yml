@@ -1,0 +1,95 @@
+name: Historical backfill
+
+on:
+  workflow_dispatch:   # manual trigger only — run once per election cycle
+
+jobs:
+  backfill:
+    name: Backfill historical data
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+    steps:
+      - name: Install flyctl
+        run: |
+          curl -L https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> $GITHUB_PATH
+
+      - name: Scale up for backfill
+        run: fly scale memory 4096 --app pili-pinas-api --yes
+
+      - name: Wake API
+        run: |
+          for i in $(seq 1 12); do
+            if curl -sf "$API_URL/health"; then
+              echo "API is up after attempt $i"
+              break
+            fi
+            echo "Waiting for machine to start... ($i/12)"
+            sleep 15
+          done
+        env:
+          API_URL: ${{ vars.PILI_PINAS_API_URL }}
+
+      - name: Trigger backfill job
+        run: |
+          JOB=$(curl -sf -X POST "$API_URL/scrape" \
+            -H "Content-Type: application/json" \
+            -H "X-API-Key: $API_KEY" \
+            -d '{
+              "sources": ["senate_bills", "senators", "gazette", "house_bills", "house_members", "comelec"],
+              "congresses": [17, 18, 19, 20],
+              "election_years": [2016, 2019, 2022, 2025],
+              "max_pages": 500,
+              "max_laws": 1000,
+              "embed": true,
+              "resume": false
+            }')
+          echo "Backfill job started: $JOB"
+          JOB_ID=$(echo "$JOB" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
+
+          # Poll until done (max 3 hours)
+          for i in $(seq 1 360); do
+            sleep 30
+            HTTP_CODE=$(curl -s -o /tmp/status.json -w "%{http_code}" \
+              "$API_URL/scrape/$JOB_ID" -H "X-API-Key: $API_KEY")
+            STATUS=$(cat /tmp/status.json)
+            echo "[$i] http=$HTTP_CODE $STATUS"
+
+            if [[ "$HTTP_CODE" == "404" ]]; then
+              echo "Machine restarted — retrying with resume=true"
+              JOB=$(curl -sf -X POST "$API_URL/scrape" \
+                -H "Content-Type: application/json" \
+                -H "X-API-Key: $API_KEY" \
+                -d '{
+                  "sources": ["senate_bills", "senators", "gazette", "house_bills", "house_members", "comelec"],
+                  "congresses": [17, 18, 19, 20],
+                  "election_years": [2016, 2019, 2022, 2025],
+                  "max_pages": 500,
+                  "max_laws": 1000,
+                  "embed": true,
+                  "resume": true
+                }')
+              JOB_ID=$(echo "$JOB" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
+              continue
+            fi
+
+            STATE=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "parse_error")
+            if [[ "$STATE" == "done" ]]; then
+              echo "Backfill complete!"
+              echo "$STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print('stats:', d.get('stats',{}))"
+              break
+            elif [[ "$STATE" == "failed" ]]; then
+              echo "Backfill failed: $STATUS"
+              exit 1
+            fi
+          done
+        env:
+          API_URL: ${{ vars.PILI_PINAS_API_URL }}
+          API_KEY: ${{ secrets.PILI_PINAS_API_KEY }}
+
+      - name: Scale down after backfill
+        if: always()
+        run: fly scale memory 1024 --app pili-pinas-api --yes
