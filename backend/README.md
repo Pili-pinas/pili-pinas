@@ -23,6 +23,38 @@ python src/embeddings/create_embeddings.py
 uvicorn src.api.main:app --reload
 ```
 
+## Historical Backfill
+
+Run once to populate 10 years of data (Congress 17–20, elections 2016–2025, 1000 laws).
+The script skips news since RSS feeds have no historical archive.
+
+```bash
+# From repo root — full backfill
+./scripts/backfill.sh
+
+# Specific sources only
+./scripts/backfill.sh senate_bills gazette
+./scripts/backfill.sh comelec
+```
+
+After the script finishes, rebuild the embeddings:
+
+```bash
+python backend/src/embeddings/create_embeddings.py
+```
+
+**Parameters** (edit `scripts/backfill.sh` to adjust):
+
+| Parameter | Default | Description |
+|---|---|---|
+| `--congresses` | `17 18 19 20` | Congress sessions to scrape for bills |
+| `--election-years` | `2016 2019 2022 2025` | COMELEC election years |
+| `--max-pages` | `500` | Max bills per congress session |
+| `--max-laws` | `1000` | Max laws from Official Gazette |
+
+You can also trigger a backfill remotely via GitHub Actions:
+**Actions → Historical backfill → Run workflow** (scales to 4GB automatically).
+
 ## Endpoints
 
 | Method | Path      | Description               |
