@@ -20,7 +20,7 @@ jobs:
           echo "$HOME/.fly/bin" >> $GITHUB_PATH
 
       - name: Scale up for scrape
-        run: fly scale memory 4096 --app pili-pinas-api
+        run: fly scale memory 3072 --app pili-pinas-api
       - name: Wake API
         run: |
           for i in $(seq 1 12); do
