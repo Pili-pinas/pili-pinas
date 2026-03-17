@@ -529,6 +529,7 @@ def query(req: QueryRequest):
             query=req.question,
             chunks_used=cached["chunks_used"],
         )
+    logger.info("Cache miss — running RAG pipeline")
 
     try:
         rag = get_rag()

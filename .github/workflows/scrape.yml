@@ -10,8 +10,18 @@ jobs:
     name: Scrape and embed
     runs-on: ubuntu-latest
     environment: production
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
     steps:
+      - name: Install flyctl
+        run: |
+          curl -L https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> $GITHUB_PATH
+
+      - name: Scale up for scrape
+        run: fly scale memory 4096 --app pili-pinas-api --yes
+
       - name: Wake API
         run: |
           for i in $(seq 1 12); do
@@ -84,3 +94,7 @@ jobs:
         env:
           API_URL: ${{ vars.PILI_PINAS_API_URL }}
           API_KEY: ${{ secrets.PILI_PINAS_API_KEY }}
+
+      - name: Scale down after scrape
+        if: always()
+        run: fly scale memory 1024 --app pili-pinas-api --yes

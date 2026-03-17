@@ -112,6 +112,7 @@ class PiliPinasRAG:
     def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
         """Call Claude Haiku via the Anthropic API."""
         import anthropic
+        logger.info(f"Calling LLM: model={CLAUDE_MODEL} prompt_chars={len(user_prompt)}")
         client = anthropic.Anthropic()
         message = client.messages.create(
             model=CLAUDE_MODEL,
@@ -119,7 +120,9 @@ class PiliPinasRAG:
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
-        return message.content[0].text
+        text = message.content[0].text
+        logger.info(f"LLM response received: {len(text)} chars, input_tokens={message.usage.input_tokens} output_tokens={message.usage.output_tokens}")
+        return text
 
     def query(
         self,
