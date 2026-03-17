@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Ensure 'src/' is on the path when run as a script (python ingestion.py)
-sys.path.insert(0, str(Path(__file__).parents[2]))
+sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from data_ingestion.scrapers.senate import scrape_bills as scrape_senate_bills, scrape_senators
 from data_ingestion.scrapers.official_gazette import scrape_laws

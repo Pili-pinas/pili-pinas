@@ -11,8 +11,12 @@ import json
 import logging
 import hashlib
 import os
+import sys
 import argparse
 from pathlib import Path
+
+# Ensure 'src/' is on the path when run as a script
+sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
@@ -72,6 +76,16 @@ def embed_collection(jsonl_path: Path, model: SentenceTransformer, store: Vector
         batch_docs = docs[i : i + BATCH_SIZE]
         batch_texts = [d["text"] for d in batch_docs]
         batch_ids = [doc_id(d, i + j) for j, d in enumerate(batch_docs)]
+
+        # Deduplicate within the batch — ChromaDB errors on duplicate IDs in one call
+        seen: dict[str, int] = {}
+        for pos, uid in enumerate(batch_ids):
+            seen[uid] = pos  # last writer wins
+        unique_positions = sorted(seen.values())
+        batch_ids = [batch_ids[p] for p in unique_positions]
+        batch_texts = [batch_texts[p] for p in unique_positions]
+        batch_docs = [batch_docs[p] for p in unique_positions]
+
         embeddings = model.encode(batch_texts, normalize_embeddings=True).tolist()
         store.upsert(
             ids=batch_ids,

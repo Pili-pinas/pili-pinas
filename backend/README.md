@@ -7,7 +7,7 @@ FastAPI + LangChain + ChromaDB RAG pipeline.
 ```bash
 uv pip install -r requirements.txt
 cp ../.env.example ../.env
-# Edit .env if needed (default: Ollama + llama3.2)
+# Set ANTHROPIC_API_KEY in .env
 ```
 
 ## Pipeline
@@ -28,13 +28,22 @@ uvicorn src.api.main:app --reload
 Run once to populate 10 years of data (Congress 17–20, elections 2016–2025, 1000 laws).
 The script skips news since RSS feeds have no historical archive.
 
+**Required environment variables** — set these in `.env` (or export in your shell) before running:
+
+| Variable | Required | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | Yes (for API/queries) | Needed to run `uvicorn` and answer questions. Not required for ingestion alone. |
+| `PROCESSED_DIR` | No | Where to save JSONL chunks. Defaults to `backend/data/processed`. |
+
+The ingestion script itself (scraping + chunking) does **not** call the LLM, so
+`ANTHROPIC_API_KEY` is only needed when you later start the API with `uvicorn`.
+
 ```bash
-# From repo root — full backfill
+# From repo root — full backfill (default: 1000 laws)
 ./scripts/backfill.sh
 
-# Specific sources only
-./scripts/backfill.sh senate_bills gazette
-./scripts/backfill.sh comelec
+# Custom max laws (e.g. all 12,500 Republic Acts)
+./scripts/backfill.sh 12500
 ```
 
 After the script finishes, rebuild the embeddings:
