@@ -14,6 +14,7 @@ Run:
     uvicorn backend.src.api.main:app --reload
 """
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -143,6 +144,87 @@ def _log_unanswered(question: str, source_type: str | None) -> None:
             )
     except Exception:
         logger.exception("Failed to log unanswered question")
+
+
+# ── Query cache (persisted to the mounted volume) ────────────────────────────
+
+QUERY_CACHE_DB = VECTOR_DB_DIR / "query_cache.db"
+
+
+def _cache_key(question: str, source_type: str | None) -> str:
+    normalized = question.lower().strip()
+    return hashlib.md5(f"{normalized}|{source_type or ''}".encode()).hexdigest()
+
+
+def _init_cache_db() -> None:
+    QUERY_CACHE_DB.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(QUERY_CACHE_DB) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS query_cache (
+                cache_key   TEXT PRIMARY KEY,
+                question    TEXT NOT NULL,
+                source_type TEXT,
+                answer      TEXT NOT NULL,
+                sources     TEXT NOT NULL,
+                chunks_used INTEGER NOT NULL,
+                cached_at   TEXT NOT NULL,
+                hit_count   INTEGER DEFAULT 0
+            )
+        """)
+
+
+def _cache_get(question: str, source_type: str | None) -> dict | None:
+    try:
+        _init_cache_db()
+        key = _cache_key(question, source_type)
+        with sqlite3.connect(QUERY_CACHE_DB) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT answer, sources, chunks_used FROM query_cache WHERE cache_key = ?",
+                (key,),
+            ).fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE query_cache SET hit_count = hit_count + 1 WHERE cache_key = ?",
+                    (key,),
+                )
+                return {
+                    "answer": row["answer"],
+                    "sources": json.loads(row["sources"]),
+                    "chunks_used": row["chunks_used"],
+                }
+    except Exception:
+        logger.exception("Cache get failed")
+    return None
+
+
+def _cache_set(question: str, source_type: str | None, result: "QueryResponse") -> None:
+    try:
+        _init_cache_db()
+        key = _cache_key(question, source_type)
+        with sqlite3.connect(QUERY_CACHE_DB) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO query_cache
+                   (cache_key, question, source_type, answer, sources, chunks_used, cached_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    key, question, source_type, result.answer,
+                    json.dumps([s.model_dump() for s in result.sources]),
+                    result.chunks_used, datetime.now().isoformat(),
+                ),
+            )
+    except Exception:
+        logger.exception("Cache set failed")
+
+
+def _cache_clear() -> None:
+    try:
+        _init_cache_db()
+        with sqlite3.connect(QUERY_CACHE_DB) as conn:
+            deleted = conn.execute("DELETE FROM query_cache").rowcount
+        logger.info(f"Query cache cleared: {deleted} entries removed")
+    except Exception:
+        logger.exception("Cache clear failed")
 
 
 # ── Scrape progress (persisted to the mounted volume) ────────────────────────
@@ -418,6 +500,17 @@ def query(req: QueryRequest):
     - Increase `top_k` for complex questions that span multiple documents
     """
     logger.info(f"Query received: question={req.question!r} source_type={req.source_type!r} top_k={req.top_k}")
+
+    cached = _cache_get(req.question, req.source_type)
+    if cached:
+        logger.info(f"Cache hit for question={req.question!r}")
+        return QueryResponse(
+            answer=cached["answer"],
+            sources=[SourceDoc(**s) for s in cached["sources"]],
+            query=req.question,
+            chunks_used=cached["chunks_used"],
+        )
+
     try:
         rag = get_rag()
         rag.top_k = req.top_k
@@ -430,13 +523,16 @@ def query(req: QueryRequest):
         if result.chunks_used == 0:
             logger.info(f"No relevant chunks found — logging unanswered question: {req.question!r}")
             _log_unanswered(req.question, req.source_type)
-        logger.info(f"Query answered: chunks_used={result.chunks_used} sources={[s['source'] for s in result.sources]}")
-        return QueryResponse(
+
+        response = QueryResponse(
             answer=result.answer,
             sources=[SourceDoc(**s) for s in result.sources],
             query=result.query,
             chunks_used=result.chunks_used,
         )
+        _cache_set(req.question, req.source_type, response)
+        logger.info(f"Query answered: chunks_used={result.chunks_used} sources={[s['source'] for s in result.sources]}")
+        return response
     except Exception as e:
         logger.exception(f"Query failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -506,6 +602,7 @@ def _run_scrape_job(job_id: str, req: ScrapeRequest) -> None:
         _jobs[job_id]["status"] = "done"
         progress["status"] = "done"
         _save_progress(progress)
+        _cache_clear()
     except Exception as e:
         logger.exception(f"Scrape job {job_id} failed: {e}")
         _jobs[job_id]["status"] = "failed"

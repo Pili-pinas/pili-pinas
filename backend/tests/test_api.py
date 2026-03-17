@@ -18,9 +18,10 @@ from retrieval.rag_chain import RAGResult
 
 
 @pytest.fixture(autouse=True)
-def clear_jobs():
-    """Reset job store and bypass auth before each test."""
+def clear_jobs(tmp_path, monkeypatch):
+    """Reset job store, isolate cache DB, and bypass auth before each test."""
     _jobs.clear()
+    monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
     app.dependency_overrides[verify_api_key] = lambda: "test-api-key"
     yield
     _jobs.clear()
@@ -277,6 +278,88 @@ class TestScrapeStatus:
 # ---------------------------------------------------------------------------
 # _run_scrape_job (background task — called directly, not via HTTP)
 # ---------------------------------------------------------------------------
+
+class TestQueryCache:
+    def test_cache_hit_skips_rag_call(self, tmp_path, monkeypatch):
+        """Second identical question returns cached answer without calling RAG."""
+        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        mock_rag = _mock_rag("Cached answer.")
+        with patch("api.main.get_rag", return_value=mock_rag):
+            client.post("/query", json={"question": "Who is the president?"})
+            client.post("/query", json={"question": "Who is the president?"})
+        assert mock_rag.query.call_count == 1
+
+    def test_cache_hit_returns_same_answer(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        mock_rag = _mock_rag("The president is Marcos Jr.")
+        with patch("api.main.get_rag", return_value=mock_rag):
+            r1 = client.post("/query", json={"question": "Who is the president?"}).json()
+            r2 = client.post("/query", json={"question": "Who is the president?"}).json()
+        assert r1["answer"] == r2["answer"] == "The president is Marcos Jr."
+
+    def test_cache_key_is_case_insensitive(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        mock_rag = _mock_rag("Answer.")
+        with patch("api.main.get_rag", return_value=mock_rag):
+            client.post("/query", json={"question": "Who is the president?"})
+            client.post("/query", json={"question": "WHO IS THE PRESIDENT?"})
+        assert mock_rag.query.call_count == 1
+
+    def test_cache_key_strips_whitespace(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        mock_rag = _mock_rag("Answer.")
+        with patch("api.main.get_rag", return_value=mock_rag):
+            client.post("/query", json={"question": "Who is the president?"})
+            client.post("/query", json={"question": "  Who is the president?  "})
+        assert mock_rag.query.call_count == 1
+
+    def test_different_source_type_is_different_cache_entry(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        mock_rag = _mock_rag("Answer.")
+        with patch("api.main.get_rag", return_value=mock_rag):
+            client.post("/query", json={"question": "Who is the president?", "source_type": "news"})
+            client.post("/query", json={"question": "Who is the president?", "source_type": "bill"})
+        assert mock_rag.query.call_count == 2
+
+    def test_scrape_completion_clears_cache(self, tmp_path, monkeypatch):
+        """After a successful scrape job, the cache is wiped so fresh data is served."""
+        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        monkeypatch.setattr(main_module, "PROGRESS_FILE", tmp_path / "progress.json")
+
+        mock_rag = _mock_rag("Answer.")
+        with patch("api.main.get_rag", return_value=mock_rag):
+            client.post("/query", json={"question": "Who is the president?"})
+        assert mock_rag.query.call_count == 1
+
+        # Run scrape — cache should be cleared
+        job_id = "cache-clear-job"
+        _jobs[job_id] = {"status": "pending", "started_at": None, "finished_at": None, "stats": None, "error": None}
+        with patch("data_ingestion.ingestion.run_ingestion", return_value={"counts": {}, "total_chunks": 0}), \
+             patch("embeddings.create_embeddings.run_embedding_pipeline", return_value={}):
+            _run_scrape_job(job_id, ScrapeRequest(embed=True))
+
+        # Same question must call RAG again
+        with patch("api.main.get_rag", return_value=mock_rag):
+            client.post("/query", json={"question": "Who is the president?"})
+        assert mock_rag.query.call_count == 2
+
+    def test_unanswered_not_logged_twice_on_cache_hit(self, tmp_path, monkeypatch):
+        """A cached no-answer result is served from cache; unanswered is logged only once."""
+        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        mock_rag = _mock_rag_no_answer()
+        with patch("api.main.get_rag", return_value=mock_rag):
+            client.post("/query", json={"question": "Sino si Leni Robredo?"})
+            client.post("/query", json={"question": "Sino si Leni Robredo?"})
+        rows = client.get("/unanswered").json()["questions"]
+        assert len(rows) == 1
+
 
 class TestRunScrapeJob:
     def _make_job(self):
