@@ -1,6 +1,6 @@
 """
 Philippine news site scrapers.
-Covers: Rappler, Inquirer, PhilStar, Manila Bulletin, GMA News.
+Covers: Rappler, PhilStar, Business World, GMA News, PCIJ.
 
 Each scraper fetches recent articles about Philippine politics/government.
 We use RSS feeds where available (less brittle than HTML scraping).
@@ -33,9 +33,9 @@ HEADERS = {
 
 # Politics-focused RSS feeds — verified working as of 2026-03.
 # mb.com.ph dropped: all their feeds return JS-rendered HTML (no RSS without a browser).
+# inquirer.net dropped: blocks automated requests with 403 Forbidden.
 RSS_FEEDS = {
     "rappler.com":      "https://www.rappler.com/category/nation/politics/feed/",
-    "inquirer.net":     "https://newsinfo.inquirer.net/feed",
     "philstar.com":     "https://www.philstar.com/rss/nation",
     "bworldonline.com": "https://www.bworldonline.com/feed/",
     "gmanetwork.com":   "https://data.gmanetwork.com/gno/rss/news/nation/feed.xml",

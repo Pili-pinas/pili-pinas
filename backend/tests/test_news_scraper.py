@@ -214,8 +214,8 @@ class TestScrapeAllNews:
         for call in mock_fn.call_args_list:
             assert call.kwargs.get("max_items") == 7 or call.args[2] == 7
 
-    def test_rss_feeds_has_all_six_sources(self):
-        expected = {"rappler.com", "inquirer.net", "philstar.com",
+    def test_rss_feeds_has_all_five_sources(self):
+        expected = {"rappler.com", "philstar.com",
                     "bworldonline.com", "gmanetwork.com", "pcij.org"}
         assert set(RSS_FEEDS.keys()) == expected
 

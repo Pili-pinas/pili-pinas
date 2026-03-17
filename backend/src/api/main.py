@@ -59,7 +59,7 @@ documents, laws, and news articles.
 | congress.gov.ph | House bills, member profiles |
 | officialgazette.gov.ph | Laws, executive orders |
 | comelec.gov.ph | Candidates, election results |
-| Rappler, Inquirer, PhilStar, GMA | News articles |
+| Rappler, PhilStar, GMA, PCIJ | News articles |
 
 ## Scraping
 
@@ -217,12 +217,49 @@ def _cache_set(question: str, source_type: str | None, result: "QueryResponse") 
         logger.exception("Cache set failed")
 
 
-def _cache_clear() -> None:
+# Maps scrape source names to the document domains they produce.
+_SCRAPE_SOURCE_DOMAINS: dict[str, set[str]] = {
+    "news":          {"rappler.com", "philstar.com", "bworldonline.com", "gmanetwork.com", "pcij.org"},
+    "senate_bills":  {"senate.gov.ph"},
+    "senators":      {"senate.gov.ph", "en.wikipedia.org"},
+    "gazette":       {"elibrary.judiciary.gov.ph"},
+    "house_bills":   {"open-congress-api.bettergov.ph"},
+    "house_members": {"congress.gov.ph", "en.wikipedia.org"},
+    "comelec":       {"comelec.gov.ph"},
+}
+
+
+def _cache_clear(scraped_sources: list[str] | None = None) -> None:
+    """Clear cache entries whose sources overlap with the scraped sources.
+
+    If scraped_sources is None, clears the entire cache (used by DELETE /cache).
+    """
     try:
         _init_cache_db()
         with sqlite3.connect(QUERY_CACHE_DB) as conn:
-            deleted = conn.execute("DELETE FROM query_cache").rowcount
-        logger.info(f"Query cache cleared: {deleted} entries removed")
+            if scraped_sources is None:
+                deleted = conn.execute("DELETE FROM query_cache").rowcount
+                logger.info(f"Query cache fully cleared: {deleted} entries removed")
+                return
+
+            domains: set[str] = set()
+            for src in scraped_sources:
+                domains |= _SCRAPE_SOURCE_DOMAINS.get(src, set())
+
+            if not domains:
+                return
+
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT cache_key, sources FROM query_cache").fetchall()
+            keys_to_delete = [
+                row["cache_key"]
+                for row in rows
+                if set(s.get("source", "") for s in json.loads(row["sources"])) & domains
+            ]
+            if keys_to_delete:
+                placeholders = ",".join("?" * len(keys_to_delete))
+                conn.execute(f"DELETE FROM query_cache WHERE cache_key IN ({placeholders})", keys_to_delete)
+            logger.info(f"Selective cache clear: {len(keys_to_delete)} entries removed for sources={scraped_sources}")
     except Exception:
         logger.exception("Cache clear failed")
 
@@ -622,7 +659,7 @@ def _run_scrape_job(job_id: str, req: ScrapeRequest) -> None:
         _jobs[job_id]["status"] = "done"
         progress["status"] = "done"
         _save_progress(progress)
-        _cache_clear()
+        _cache_clear(scraped_sources=sources)
     except Exception as e:
         logger.exception(f"Scrape job {job_id} failed: {e}")
         _jobs[job_id]["status"] = "failed"
@@ -678,7 +715,7 @@ def trigger_scrape(req: ScrapeRequest, background_tasks: BackgroundTasks):
     | `house_bills` | House bills from congress.gov.ph |
     | `house_members` | House representative profiles |
     | `comelec` | 2025 candidate list from comelec.gov.ph |
-    | `news` | RSS feeds from Rappler, Inquirer, PhilStar, MB, GMA |
+    | `news` | RSS feeds from Rappler, PhilStar, GMA, Business World, PCIJ |
 
     Omit `sources` (or set to `null`) to scrape **all** sources.
 
