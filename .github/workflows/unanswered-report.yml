@@ -1,0 +1,108 @@
+name: Daily unanswered questions report
+
+on:
+  schedule:
+    - cron: "0 2 * * *"  # 02:00 UTC = 10:00 Philippine Time (after daily scrape)
+  workflow_dispatch:       # allow manual trigger from GitHub UI
+
+jobs:
+  report:
+    name: Send unanswered questions report
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Fetch unanswered questions
+        run: |
+          HTTP_CODE=$(curl -s -o /tmp/unanswered.json -w "%{http_code}" \
+            "$API_URL/unanswered" \
+            -H "X-API-Key: $API_KEY")
+
+          if [[ "$HTTP_CODE" != "200" ]]; then
+            echo "Failed to fetch unanswered questions: HTTP $HTTP_CODE"
+            cat /tmp/unanswered.json
+            exit 1
+          fi
+
+          echo "Fetched unanswered questions:"
+          cat /tmp/unanswered.json
+        env:
+          API_URL: ${{ vars.PILI_PINAS_API_URL }}
+          API_KEY: ${{ secrets.PILI_PINAS_API_KEY }}
+
+      - name: Format report
+        run: |
+          python3 << 'EOF'
+          import json, os
+          from datetime import datetime, timezone, timedelta
+
+          PHT = timezone(timedelta(hours=8))
+          now = datetime.now(PHT).strftime("%B %d, %Y")
+
+          with open("/tmp/unanswered.json") as f:
+              data = json.load(f)
+
+          questions = data.get("questions", [])
+          total = len(questions)
+
+          TD = "padding:8px 12px;border:1px solid #ddd;font-family:sans-serif;font-size:14px;color:#333;"
+          TH = "padding:10px 12px;border:1px solid #ddd;font-family:sans-serif;font-size:14px;background:#2c2c2c;color:#fff;text-align:left;"
+
+          if total == 0:
+              body = f"""
+              <div style="font-family:sans-serif;max-width:800px;margin:0 auto;">
+                <h2 style="color:#2c2c2c;">Pili-Pinas — Unanswered Questions</h2>
+                <p style="color:#666;">{now}</p>
+                <p style="color:#333;">No unanswered questions. Great coverage!</p>
+              </div>
+              """
+          else:
+              rows = ""
+              for i, q in enumerate(questions, 1):
+                  asked = q.get("asked_at", "")[:19].replace("T", " ")
+                  source = q.get("source_type") or "—"
+                  question = q.get("question", "")
+                  bg = "#ffffff" if i % 2 == 0 else "#f9f9f9"
+                  rows += f"""
+                  <tr style="background:{bg};">
+                    <td style="{TD}">{i}</td>
+                    <td style="{TD}">{question}</td>
+                    <td style="{TD};white-space:nowrap;">{source}</td>
+                    <td style="{TD};white-space:nowrap;">{asked}</td>
+                  </tr>"""
+
+              body = f"""
+              <div style="font-family:sans-serif;max-width:800px;margin:0 auto;">
+                <h2 style="color:#2c2c2c;">Pili-Pinas — Unanswered Questions</h2>
+                <p style="color:#666;">{now} &nbsp;·&nbsp; <strong>{total}</strong> unanswered</p>
+                <table style="border-collapse:collapse;width:100%;">
+                  <thead>
+                    <tr>
+                      <th style="{TH}">#</th>
+                      <th style="{TH}">Question</th>
+                      <th style="{TH}">Source</th>
+                      <th style="{TH}">Asked</th>
+                    </tr>
+                  </thead>
+                  <tbody>{rows}</tbody>
+                </table>
+              </div>
+              """
+
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write("REPORT_TOTAL=" + str(total) + "\n")
+              delimiter = "EOF_REPORT"
+              f.write(f"REPORT_BODY<<{delimiter}\n{body}\n{delimiter}\n")
+          EOF
+
+      - name: Send email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ vars.MAIL_PORT || 587 }}
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "Pili-Pinas: ${{ env.REPORT_TOTAL }} unanswered questions"
+          to: change@pili-pinas.com
+          from: Pili-Pinas <${{ secrets.MAIL_USERNAME }}>
+          html_body: ${{ env.REPORT_BODY }}
