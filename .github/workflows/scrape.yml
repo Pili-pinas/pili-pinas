@@ -20,8 +20,7 @@ jobs:
           echo "$HOME/.fly/bin" >> $GITHUB_PATH
 
       - name: Scale up for scrape
-        run: fly scale memory 4096 --app pili-pinas-api --yes
-
+        run: fly scale memory 4096 --app pili-pinas-api
       - name: Wake API
         run: |
           for i in $(seq 1 12); do
@@ -97,4 +96,4 @@ jobs:
 
       - name: Scale down after scrape
         if: always()
-        run: fly scale memory 1024 --app pili-pinas-api --yes
+        run: fly scale memory 1024 --app pili-pinas-api
