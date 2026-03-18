@@ -23,6 +23,14 @@ echo "Max bills : 500 per congress"
 echo "Max laws  : $MAX_LAWS"
 echo ""
 
+# Clear the seen-URLs tracker so the next daily news scrape re-fetches
+# any articles that previously returned empty content.
+SEEN_URLS="$REPO_ROOT/data/seen_urls.json"
+if [[ -f "$SEEN_URLS" ]]; then
+  rm "$SEEN_URLS"
+  echo "Cleared seen_urls.json"
+fi
+
 python backend/src/data_ingestion/ingestion.py \
   --sources senate_bills senators gazette house_bills house_members comelec \
   --congresses 17 18 19 20 \
