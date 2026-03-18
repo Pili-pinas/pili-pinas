@@ -10,9 +10,7 @@ from data_ingestion.scrapers.senate import (
     scrape_bills,
     scrape_senators,
     _bill_to_doc,
-    _parse_senators_table,
 )
-from bs4 import BeautifulSoup
 
 
 # ---------------------------------------------------------------------------
@@ -52,55 +50,57 @@ BETTERGOV_PAGE_2 = {
     "pagination": {"total": 3, "limit": 1, "offset": 2, "has_more": False, "next_cursor": None},
 }
 
-WIKIPEDIA_HTML = """
-<html><body>
-<table class="wikitable">
-  <tr>
-    <th>Portrait</th><th>Senator</th><th>Party</th><th>Bloc</th>
-    <th>Born</th><th>Occupation(s)</th><th>Previous elective office(s)</th>
-    <th>Education</th><th>Took office</th><th>Term ending</th><th>Term</th>
-  </tr>
-  <tr>
-    <td></td>
-    <td><a href="/wiki/Bam_Aquino">Bam Aquino</a></td>
-    <td></td>
-    <td>KANP</td>
-    <td>Majority</td>
-    <td>(1977-05-07)May 7, 1977(age 48)</td>
-    <td>Social entrepreneurTelevision host</td>
-    <td>None</td>
-    <td>Ateneo</td>
-    <td>June 30, 2025</td>
-    <td>June 30, 2031</td>
-    <td>1</td>
-  </tr>
-  <tr>
-    <td></td>
-    <td><a href="/wiki/Pia_Cayetano">Pia Cayetano</a></td>
-    <td></td>
-    <td>Nacionalista</td>
-    <td>Majority</td>
-    <td>(1966-03-22)March 22, 1966(age 59)</td>
-    <td>Lawyer</td>
-    <td>None</td>
-    <td>UP</td>
-    <td>June 30, 2025</td>
-    <td>June 30, 2031</td>
-    <td>2</td>
-  </tr>
-</table>
-</body></html>
-"""
+BETTERGOV_SENATOR = {
+    "id": "person-s1",
+    "first_name": "Risa",
+    "middle_name": "Calderon",
+    "last_name": "Hontiveros",
+    "name_prefix": None,
+    "name_suffix": None,
+    "aliases": ["Risa"],
+    "senate_website_keys": ["hontiveros"],
+    "congress_website_primary_keys": None,
+    "congresses_served": [
+        {"congress_number": 18, "congress_ordinal": "18th", "position": "Senator"},
+        {"congress_number": 19, "congress_ordinal": "19th", "position": "Senator"},
+    ],
+}
 
-# Table without "Senator" header — should be skipped
-IRRELEVANT_TABLE_HTML = """
-<html><body>
-<table class="wikitable">
-  <tr><th>Party</th><th>Seats</th></tr>
-  <tr><td>NPC</td><td>6</td></tr>
-</table>
-</body></html>
-"""
+BETTERGOV_SENATOR_2 = {
+    "id": "person-s2",
+    "first_name": "Nancy",
+    "middle_name": "",
+    "last_name": "Binay",
+    "name_prefix": None,
+    "name_suffix": None,
+    "aliases": [],
+    "senate_website_keys": ["binay"],
+    "congress_website_primary_keys": None,
+    "congresses_served": [
+        {"congress_number": 19, "congress_ordinal": "19th", "position": "Senator"},
+    ],
+}
+
+BETTERGOV_REP_PERSON = {
+    "id": "person-r1",
+    "first_name": "Joseph",
+    "middle_name": "",
+    "last_name": "Bernos",
+    "name_prefix": None,
+    "name_suffix": None,
+    "aliases": [],
+    "senate_website_keys": None,
+    "congress_website_primary_keys": [123],
+    "congresses_served": [
+        {"congress_number": 19, "congress_ordinal": "19th", "position": "Representative"},
+    ],
+}
+
+PEOPLE_PAGE_1 = {
+    "success": True,
+    "data": [BETTERGOV_SENATOR, BETTERGOV_REP_PERSON],
+    "pagination": {"has_more": False, "next_cursor": None},
+}
 
 
 def _mock_response(data, status=200):
@@ -239,117 +239,72 @@ class TestScrapeBills:
 
 
 # ---------------------------------------------------------------------------
-# _parse_senators_table
-# ---------------------------------------------------------------------------
-
-class TestParseSenators:
-    def _soup(self, html):
-        return BeautifulSoup(html, "lxml")
-
-    def test_returns_correct_number_of_senators(self):
-        rows = _parse_senators_table(self._soup(WIKIPEDIA_HTML))
-        assert len(rows) == 2
-
-    def test_extracts_senator_name(self):
-        rows = _parse_senators_table(self._soup(WIKIPEDIA_HTML))
-        assert rows[0]["name"] == "Bam Aquino"
-
-    def test_extracts_wiki_path(self):
-        rows = _parse_senators_table(self._soup(WIKIPEDIA_HTML))
-        assert rows[0]["wiki_path"] == "/wiki/Bam_Aquino"
-
-    def test_bio_text_contains_party(self):
-        rows = _parse_senators_table(self._soup(WIKIPEDIA_HTML))
-        assert "KANP" in rows[0]["bio_text"]
-
-    def test_bio_text_contains_bloc(self):
-        rows = _parse_senators_table(self._soup(WIKIPEDIA_HTML))
-        assert "Majority" in rows[0]["bio_text"]
-
-    def test_bio_text_strips_sortkey_from_born(self):
-        rows = _parse_senators_table(self._soup(WIKIPEDIA_HTML))
-        # Sortkey like "(1977-05-07)" should be stripped
-        assert "(1977-05-07)" not in rows[0]["bio_text"]
-        assert "1977" in rows[0]["bio_text"]
-
-    def test_skips_table_without_senator_header(self):
-        rows = _parse_senators_table(self._soup(IRRELEVANT_TABLE_HTML))
-        assert rows == []
-
-    def test_second_senator_parsed(self):
-        rows = _parse_senators_table(self._soup(WIKIPEDIA_HTML))
-        assert rows[1]["name"] == "Pia Cayetano"
-        assert "Nacionalista" in rows[1]["bio_text"]
-
-
-# ---------------------------------------------------------------------------
 # scrape_senators
 # ---------------------------------------------------------------------------
 
 class TestScrapeSenators:
-    def test_returns_empty_when_wikipedia_fails(self):
+    def test_returns_empty_when_api_fails(self):
         with patch("data_ingestion.scrapers.senate._get", return_value=None):
             docs = scrape_senators()
         assert docs == []
 
-    def test_returns_one_doc_per_senator(self):
-        list_resp = _mock_response(WIKIPEDIA_HTML)
-        list_resp.content = WIKIPEDIA_HTML.encode()
-        bio_resp = _mock_response("<html><body><div class='mw-parser-output'><p>Senator bio.</p></div></body></html>")
-        bio_resp.content = b"<html><body><div class='mw-parser-output'><p>Senator bio.</p></div></body></html>"
-        with patch("data_ingestion.scrapers.senate._get", side_effect=[list_resp, bio_resp, bio_resp]):
+    def test_returns_only_senators_not_representatives(self):
+        resp = _mock_response(PEOPLE_PAGE_1)
+        with patch("data_ingestion.scrapers.senate._get", return_value=resp):
             docs = scrape_senators()
-        assert len(docs) == 2
+        assert len(docs) == 1
+        assert "Hontiveros" in docs[0]["politician"]
 
     def test_document_has_required_metadata_fields(self):
-        list_resp = _mock_response(WIKIPEDIA_HTML)
-        list_resp.content = WIKIPEDIA_HTML.encode()
-        bio_html = b"<html><body><div class='mw-parser-output'><p>Senator bio.</p></div></body></html>"
-        bio_resp = _mock_response("")
-        bio_resp.content = bio_html
-        with patch("data_ingestion.scrapers.senate._get", side_effect=[list_resp, bio_resp, bio_resp]):
+        resp = _mock_response(PEOPLE_PAGE_1)
+        with patch("data_ingestion.scrapers.senate._get", return_value=resp):
             docs = scrape_senators()
         doc = docs[0]
-        assert doc["source"] == "wikipedia.org"
+        assert doc["source"] == "open-congress-api.bettergov.ph"
         assert doc["source_type"] == "profile"
-        assert doc["politician"] == "Bam Aquino"
+        assert "Hontiveros" in doc["politician"]
         assert "Senator Profile" in doc["title"]
-        assert "wikipedia.org/wiki" in doc["url"]
 
-    def test_uses_wiki_bio_text_when_available(self):
-        list_resp = _mock_response(WIKIPEDIA_HTML)
-        list_resp.content = WIKIPEDIA_HTML.encode()
-        bio_html = b"<html><body><div class='mw-parser-output'><p>Bam Aquino is a Filipino senator.</p></div></body></html>"
-        bio_resp = _mock_response("")
-        bio_resp.content = bio_html
-        with patch("data_ingestion.scrapers.senate._get", side_effect=[list_resp, bio_resp, bio_resp]):
+    def test_profile_text_includes_congresses_served(self):
+        resp = _mock_response(PEOPLE_PAGE_1)
+        with patch("data_ingestion.scrapers.senate._get", return_value=resp):
             docs = scrape_senators()
-        assert "Filipino senator" in docs[0]["text"]
+        assert "18th" in docs[0]["text"]
+        assert "19th" in docs[0]["text"]
 
-    def test_falls_back_to_table_bio_when_wiki_page_fails(self):
-        list_resp = _mock_response(WIKIPEDIA_HTML)
-        list_resp.content = WIKIPEDIA_HTML.encode()
-        # Only the list page succeeds; individual pages fail
-        with patch("data_ingestion.scrapers.senate._get", side_effect=[list_resp, None, None]):
+    def test_profile_text_includes_aliases(self):
+        resp = _mock_response(PEOPLE_PAGE_1)
+        with patch("data_ingestion.scrapers.senate._get", return_value=resp):
+            docs = scrape_senators()
+        assert "Risa" in docs[0]["text"]
+
+    def test_excludes_person_with_no_senator_role(self):
+        rep_only = {**PEOPLE_PAGE_1, "data": [BETTERGOV_REP_PERSON]}
+        resp = _mock_response(rep_only)
+        with patch("data_ingestion.scrapers.senate._get", return_value=resp):
+            docs = scrape_senators()
+        assert docs == []
+
+    def test_handles_pagination(self):
+        page1 = {
+            "success": True,
+            "data": [BETTERGOV_SENATOR],
+            "pagination": {"has_more": True, "next_cursor": "cursor-2"},
+        }
+        page2 = {
+            "success": True,
+            "data": [BETTERGOV_SENATOR_2],
+            "pagination": {"has_more": False, "next_cursor": None},
+        }
+        resp1 = _mock_response(page1)
+        resp2 = _mock_response(page2)
+        with patch("data_ingestion.scrapers.senate._get", side_effect=[resp1, resp2]):
             docs = scrape_senators()
         assert len(docs) == 2
-        # Should still have bio_text from table
-        assert "KANP" in docs[0]["text"]
 
-    def test_strips_footnote_markers_from_bio_text(self):
-        list_resp = _mock_response(WIKIPEDIA_HTML)
-        list_resp.content = WIKIPEDIA_HTML.encode()
-        bio_html = b"<html><body><div class='mw-parser-output'><p>He served[1] as senator[2].</p></div></body></html>"
-        bio_resp = _mock_response("")
-        bio_resp.content = bio_html
-        with patch("data_ingestion.scrapers.senate._get", side_effect=[list_resp, bio_resp, bio_resp]):
-            docs = scrape_senators()
-        assert "[1]" not in docs[0]["text"]
-        assert "[2]" not in docs[0]["text"]
-
-    def test_returns_empty_when_no_senator_table_found(self):
-        list_resp = _mock_response(IRRELEVANT_TABLE_HTML)
-        list_resp.content = IRRELEVANT_TABLE_HTML.encode()
-        with patch("data_ingestion.scrapers.senate._get", return_value=list_resp):
-            docs = scrape_senators()
+    def test_filters_by_congress(self):
+        resp = _mock_response(PEOPLE_PAGE_1)
+        with patch("data_ingestion.scrapers.senate._get", return_value=resp):
+            # BETTERGOV_SENATOR served in 18th and 19th; filter to only 20th → excluded
+            docs = scrape_senators(congresses=[20])
         assert docs == []

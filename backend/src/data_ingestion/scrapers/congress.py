@@ -4,30 +4,22 @@ House of Representatives of the Philippines scraper.
 Data sources (congress.gov.ph is Cloudflare-blocked):
   - Bills   : BetterGov Open Congress API (open-congress-api.bettergov.ph)
               Note: HB title data is sparse; bills without titles are skipped.
-  - Members : Wikipedia current members list + individual member pages
+  - Members : BetterGov Open Congress API /people endpoint
 
 Rate limit: 1–2 seconds between requests.
 """
 
 import time
 import logging
-import re
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 import requests
-from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
 BETTERGOV_URL = "https://open-congress-api.bettergov.ph/api/documents"
-WIKIPEDIA_MEMBERS_URL = (
-    "https://en.wikipedia.org/wiki/List_of_current_members_of_the_House_of_Representatives_of_the_Philippines"
-)
-WIKIPEDIA_BASE = "https://en.wikipedia.org"
-
-RAW_DIR = Path(__file__).parents[4] / "data" / "raw"
+BETTERGOV_PEOPLE_URL = "https://open-congress-api.bettergov.ph/api/people"
 
 HEADERS = {
     "User-Agent": (
@@ -146,153 +138,97 @@ def _hb_to_doc(bill: dict, congress: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Members — Wikipedia
+# Members — BetterGov Open Congress API
 # ---------------------------------------------------------------------------
 
-def scrape_members() -> list[dict]:
+def scrape_members(congresses: Optional[list] = None) -> list[dict]:
     """
-    Scrape current House member profiles from Wikipedia.
+    Scrape House member profiles from the BetterGov Open Congress API.
 
-    Fetches the list page for basic metadata, then each member's Wikipedia
-    article for a biographical summary.
+    Fetches all politicians via pagination, filters to those who served
+    as representatives in the given congress numbers.
+
+    Args:
+        congresses: Congress numbers to include (default: 17-20).
 
     Returns:
         List of profile document dicts matching the metadata schema.
     """
-    resp = _get(WIKIPEDIA_MEMBERS_URL)
-    if resp is None:
-        return []
-
-    soup = BeautifulSoup(resp.content, "lxml")
-    member_rows = _parse_members_table(soup)
-
-    if not member_rows:
-        logger.warning("No members found in Wikipedia table.")
-        return []
-
+    target = set(congresses or [17, 18, 19, 20])
+    people = _fetch_all_people()
     documents = []
-    for row in member_rows:
-        name = row["name"]
-        wiki_path = row["wiki_path"]
 
-        bio_text = row["bio_text"]  # basic text from table
-        wiki_url = WIKIPEDIA_BASE + wiki_path if wiki_path else ""
-
-        # Fetch individual Wikipedia article for rich bio content
-        if wiki_path:
-            detail_text = _scrape_member_wiki_page(name, wiki_path)
-            if detail_text:
-                bio_text = detail_text
-
-        doc = {
-            "source": "wikipedia.org",
-            "source_type": "profile",
-            "date": datetime.now().strftime("%Y-%m-%d"),
-            "politician": name,
-            "title": f"Representative Profile: {name}",
-            "url": wiki_url,
-            "text": bio_text,
-        }
+    for person in people:
+        served = [
+            c for c in person.get("congresses_served", [])
+            if c.get("position", "").lower() == "representative"
+            and c.get("congress_number") in target
+        ]
+        if not served:
+            continue
+        doc = _build_profile_doc(person, served)
         documents.append(doc)
-        logger.info(f"Scraped member: {name}")
+        logger.info(f"Scraped member: {doc['politician']}")
 
     logger.info(f"Total house members scraped: {len(documents)}")
     return documents
 
 
-def _parse_members_table(soup: BeautifulSoup) -> list[dict]:
-    """
-    Extract member rows from the Wikipedia wikitable.
-
-    Column order (9 cells per row):
-      0: Constituency (with link)
-      1: Portrait (image)
-      2: Representative name (with link)
-      3: Party flag (image, text is empty)
-      4: Party name
-      5: Bloc (Majority/Minority)
-      6: Born
-      7: Prior experience
-      8: Took office
-    """
-    results = []
-    for table in soup.find_all("table", class_="wikitable"):
-        headers = [th.get_text(strip=True) for th in table.find_all("th")]
-        if "Representative" not in headers:
-            continue
-
-        for row in table.find_all("tr")[1:]:
-            cells = row.find_all("td")
-            if len(cells) < 5:
-                continue
-
-            name = cells[2].get_text(strip=True)
-            if not name:
-                continue
-
-            constituency = cells[0].get_text(strip=True)
-            party = cells[4].get_text(strip=True)
-            bloc = cells[5].get_text(strip=True) if len(cells) > 5 else ""
-
-            # Clean born date — strip sortkey prefix like "(1978-10-06)"
-            born_raw = cells[6].get_text(strip=True) if len(cells) > 6 else ""
-            born = re.sub(r"^\(\d{4}-\d{2}-\d{2}\)", "", born_raw).strip()
-
-            prior_exp = cells[7].get_text(separator=", ", strip=True) if len(cells) > 7 else ""
-            took_office = cells[8].get_text(strip=True) if len(cells) > 8 else ""
-
-            link_tag = cells[2].find("a")
-            wiki_path = link_tag["href"] if link_tag else ""
-
-            bio_text = (
-                f"Representative {name}, {constituency}. Party: {party}. Bloc: {bloc}. "
-                f"Prior experience: {prior_exp}. Born: {born}. "
-                f"Took office: {took_office}."
-            )
-
-            results.append({
-                "name": name,
-                "constituency": constituency,
-                "wiki_path": wiki_path,
-                "bio_text": bio_text,
-            })
-
-        break  # only need the first matching table
-
-    return results
-
-
-def _scrape_member_wiki_page(name: str, wiki_path: str) -> str:
-    """Fetch a member's Wikipedia article and return the introductory text."""
-    url = WIKIPEDIA_BASE + wiki_path
-    resp = _get(url)
-    if resp is None:
-        return ""
-
-    # Save raw HTML
-    safe_name = name.replace(" ", "_").replace(".", "")
-    raw_path = RAW_DIR / "politician_profiles" / f"rep_{safe_name}.html"
-    raw_path.parent.mkdir(parents=True, exist_ok=True)
-    raw_path.write_bytes(resp.content)
-
-    soup = BeautifulSoup(resp.content, "lxml")
-    content = soup.find("div", class_="mw-parser-output")
-    if not content:
-        return ""
-
-    # Grab all top-level paragraphs up to the first h2 section heading
-    parts = []
-    for tag in content.children:
-        if tag.name == "h2":
+def _fetch_all_people() -> list[dict]:
+    """Paginate through all BetterGov people records."""
+    people = []
+    cursor = None
+    while True:
+        params: dict = {"limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        resp = _get(BETTERGOV_PEOPLE_URL, params=params)
+        if resp is None:
             break
-        if tag.name == "p":
-            text = tag.get_text(strip=True)
-            if text:
-                # Strip inline footnote markers like [1][2]
-                text = re.sub(r"\[\d+\]", "", text)
-                parts.append(text)
+        payload = resp.json()
+        if not payload.get("success", True):
+            logger.error(f"BetterGov people API error: {payload}")
+            break
+        batch = payload.get("data", [])
+        if not batch:
+            break
+        people.extend(batch)
+        pagination = payload.get("pagination", {})
+        if not pagination.get("has_more"):
+            break
+        cursor = pagination.get("next_cursor")
+    return people
 
-    return "\n\n".join(parts)
+
+def _build_profile_doc(person: dict, served: list[dict]) -> dict:
+    """Build a representative profile document from a BetterGov person record."""
+    name_parts = [
+        person.get("name_prefix") or "",
+        person.get("first_name") or "",
+        person.get("middle_name") or "",
+        person.get("last_name") or "",
+        person.get("name_suffix") or "",
+    ]
+    full_name = " ".join(p for p in name_parts if p)
+
+    congresses_str = ", ".join(c["congress_ordinal"] for c in served)
+    text_parts = [
+        f"Representative: {full_name}.",
+        f"Served in the Philippine House of Representatives during the {congresses_str} Congress.",
+    ]
+    aliases = [a for a in (person.get("aliases") or []) if a]
+    if aliases:
+        text_parts.append(f"Also known as: {', '.join(aliases)}.")
+
+    return {
+        "source": "open-congress-api.bettergov.ph",
+        "source_type": "profile",
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "politician": full_name,
+        "title": f"Representative Profile: {full_name}",
+        "url": f"https://open-congress-api.bettergov.ph/api/people/{person['id']}",
+        "text": " ".join(text_parts),
+    }
 
 
 if __name__ == "__main__":
