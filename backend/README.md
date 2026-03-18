@@ -10,59 +10,42 @@ cp ../.env.example ../.env
 # Set ANTHROPIC_API_KEY in .env
 ```
 
-## Pipeline
+## Running locally
 
-```bash
-# 1. Ingest documents from all sources (--sources flag for subset)
-python src/data_ingestion/ingestion.py --max-pages 3 --max-news 20
-
-# 2. Build vector embeddings
-python src/embeddings/create_embeddings.py
-
-# 3. Start API
-uvicorn src.api.main:app --reload
-```
-
-## Historical Backfill
-
-Run once to populate 10 years of data (Congress 17–20, elections 2016–2025, 1000 laws).
-The script skips news since RSS feeds have no historical archive.
-
-**Required environment variables** — set these in `.env` (or export in your shell) before running:
+**Required environment variables** — set in `.env` before running:
 
 | Variable | Required | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Yes (for API/queries) | Needed to run `uvicorn` and answer questions. Not required for ingestion alone. |
+| `ANTHROPIC_API_KEY` | Yes (for API/queries) | Needed to run `uvicorn`. Not required for ingestion alone. |
 | `PROCESSED_DIR` | No | Where to save JSONL chunks. Defaults to `backend/data/processed`. |
 
-The ingestion script itself (scraping + chunking) does **not** call the LLM, so
-`ANTHROPIC_API_KEY` is only needed when you later start the API with `uvicorn`.
+### Daily scrape (news + current bills + senator profiles)
 
 ```bash
-# From repo root — full backfill (default: 1000 laws)
-./scripts/backfill.sh
-
-# Custom max laws (e.g. all 12,500 Republic Acts)
-./scripts/backfill.sh 12500
+# From repo root
+./scripts/scrape.sh           # default: 30 news articles
+./scripts/scrape.sh 50        # custom max news
 ```
 
-After the script finishes, rebuild the embeddings:
+### Historical backfill (all sources, Congress 17–20, elections 2016–2025)
+
+Run once to populate the full dataset. Skips news since RSS feeds have no historical archive.
 
 ```bash
-python backend/src/embeddings/create_embeddings.py
+./scripts/backfill.sh         # default: 1000 laws
+./scripts/backfill.sh 12500   # all 12,500+ Republic Acts
 ```
 
-**Parameters** (edit `scripts/backfill.sh` to adjust):
-
-| Parameter | Default | Description |
-|---|---|---|
-| `--congresses` | `17 18 19 20` | Congress sessions to scrape for bills |
-| `--election-years` | `2016 2019 2022 2025` | COMELEC election years |
-| `--max-pages` | `500` | Max bills per congress session |
-| `--max-laws` | `1000` | Max laws from Official Gazette |
+Both scripts run **ingestion → embeddings** in one shot using `uv`.
 
 You can also trigger a backfill remotely via GitHub Actions:
-**Actions → Historical backfill → Run workflow** (scales to 4GB automatically).
+**Actions → Historical backfill → Run workflow**.
+
+### Start the API
+
+```bash
+uvicorn src.api.main:app --reload
+```
 
 ## Endpoints
 
