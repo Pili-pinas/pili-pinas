@@ -22,6 +22,11 @@ from data_ingestion.scrapers.official_gazette import scrape_laws
 from data_ingestion.scrapers.congress import scrape_house_bills, scrape_members
 from data_ingestion.scrapers.comelec import scrape_all_comelec
 from data_ingestion.scrapers.news_sites import scrape_all_news
+from data_ingestion.scrapers.fact_check import scrape_all_fact_checks
+from data_ingestion.scrapers.oversight import scrape_all_oversight
+from data_ingestion.scrapers.statistics import scrape_all_statistics
+from data_ingestion.scrapers.research import scrape_all_research
+from data_ingestion.scrapers.financial import scrape_all_financial
 from data_ingestion.processors.html_processor import process_html_document
 from data_ingestion.document_index import upsert_documents
 
@@ -93,7 +98,8 @@ def run_ingestion(
     """
     all_sources = [
         "senate_bills", "senators", "gazette",
-        "house_bills", "house_members", "comelec", "news"
+        "house_bills", "house_members", "comelec", "news",
+        "fact_check", "oversight", "statistics", "research", "financial",
     ]
     sources = sources or all_sources
     congresses = congresses or [_CURRENT_CONGRESS]
@@ -161,6 +167,31 @@ def run_ingestion(
         docs = scrape_all_news(max_items_per_source=max_news)
         _process_and_save(docs, "news_articles")
 
+    if "fact_check" in sources:
+        logger.info("=== Fact Checks ===")
+        docs = scrape_all_fact_checks(max_items=max_news)
+        _process_and_save(docs, "fact_checks")
+
+    if "oversight" in sources:
+        logger.info("=== Oversight Bodies ===")
+        docs = scrape_all_oversight(max_items=max_news)
+        _process_and_save(docs, "oversight")
+
+    if "statistics" in sources:
+        logger.info("=== Government Statistics ===")
+        docs = scrape_all_statistics(max_items=max_news)
+        _process_and_save(docs, "statistics")
+
+    if "research" in sources:
+        logger.info("=== Research Publications ===")
+        docs = scrape_all_research(max_items=max_news)
+        _process_and_save(docs, "research")
+
+    if "financial" in sources:
+        logger.info("=== Financial Transparency ===")
+        docs = scrape_all_financial(max_items=max_news)
+        _process_and_save(docs, "financial")
+
     total = sum(stats["counts"].values())
     stats["total_chunks"] = total
     update_metadata(stats)
@@ -182,7 +213,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--sources", nargs="+",
         choices=["senate_bills", "senators", "gazette", "house_bills",
-                 "house_members", "comelec", "news"],
+                 "house_members", "comelec", "news",
+                 "fact_check", "oversight", "statistics", "research", "financial"],
         help="Sources to ingest (default: all)"
     )
     parser.add_argument("--congresses", nargs="+", type=int, default=None,

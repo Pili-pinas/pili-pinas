@@ -1,5 +1,5 @@
 """
-Tests for api/main.py
+Tests for api/main.py and associated modules.
 
 Uses FastAPI's TestClient. Heavy dependencies (RAG, vector store, scrapers)
 are mocked. The auth dependency is bypassed via app.dependency_overrides.
@@ -11,8 +11,12 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-import api.main as main_module
-from api.main import app, _jobs, _run_scrape_job, ScrapeRequest
+import api.cache as cache_module
+import api.unanswered as unanswered_module
+import api.scrape as scrape_module
+from api.main import app
+from api.scrape import _jobs, _run_scrape_job
+from api.models import ScrapeRequest
 from api.auth import verify_api_key
 from retrieval.rag_chain import RAGResult
 
@@ -21,7 +25,7 @@ from retrieval.rag_chain import RAGResult
 def clear_jobs(tmp_path, monkeypatch):
     """Reset job store, isolate cache DB, and bypass auth before each test."""
     _jobs.clear()
-    monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
+    monkeypatch.setattr(cache_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
     app.dependency_overrides[verify_api_key] = lambda: "test-api-key"
     yield
     _jobs.clear()
@@ -78,31 +82,31 @@ class TestStats:
         mock_store = MagicMock()
         mock_store.name = "pili_pinas"
         mock_store.count.return_value = 0
-        with patch("api.main.get_vector_store", return_value=mock_store):
+        with patch("api.system.get_vector_store", return_value=mock_store):
             assert client.get("/stats").status_code == 200
 
     def test_returns_collection_name_and_chunk_count(self):
         mock_store = MagicMock()
         mock_store.name = "pili_pinas"
         mock_store.count.return_value = 42
-        with patch("api.main.get_vector_store", return_value=mock_store):
+        with patch("api.system.get_vector_store", return_value=mock_store):
             data = client.get("/stats").json()
         assert data["collection"] == "pili_pinas"
         assert data["total_chunks"] == 42
 
     def test_returns_500_when_store_fails(self):
-        with patch("api.main.get_vector_store", side_effect=Exception("DB error")):
+        with patch("api.system.get_vector_store", side_effect=Exception("DB error")):
             assert client.get("/stats").status_code == 500
 
 
 class TestQuery:
     def test_valid_question_returns_200(self):
-        with patch("api.main.get_rag", return_value=_mock_rag()):
+        with patch("api.query.get_rag", return_value=_mock_rag()):
             resp = client.post("/query", json={"question": "What education bills passed?"})
         assert resp.status_code == 200
 
     def test_response_contains_answer_and_sources(self):
-        with patch("api.main.get_rag", return_value=_mock_rag("Bills were passed.")):
+        with patch("api.query.get_rag", return_value=_mock_rag("Bills were passed.")):
             data = client.post("/query", json={"question": "What education bills passed?"}).json()
         assert data["answer"] == "Bills were passed."
         assert len(data["sources"]) == 1
@@ -118,32 +122,32 @@ class TestQuery:
 
     def test_top_k_is_applied_to_rag_instance(self):
         mock_rag = _mock_rag()
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             client.post("/query", json={"question": "Test question here", "top_k": 10})
         assert mock_rag.top_k == 10
 
     def test_source_type_filter_passed_to_rag(self):
         mock_rag = _mock_rag()
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             client.post("/query", json={"question": "Test question here", "source_type": "news"})
         mock_rag.query.assert_called_once_with(question="Test question here", source_type="news")
 
     def test_top_k_defaults_to_5(self):
         mock_rag = _mock_rag()
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             client.post("/query", json={"question": "Test question here"})
         assert mock_rag.top_k == 5
 
     def test_rag_exception_returns_500(self):
         mock_rag = MagicMock()
         mock_rag.query.side_effect = RuntimeError("RAG failure")
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             resp = client.post("/query", json={"question": "Test question here"})
         assert resp.status_code == 500
 
     def test_unanswered_question_is_logged(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
-        with patch("api.main.get_rag", return_value=_mock_rag_no_answer()):
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        with patch("api.query.get_rag", return_value=_mock_rag_no_answer()):
             client.post("/query", json={"question": "Sino si Leni Robredo?"})
         resp = client.get("/unanswered")
         assert resp.status_code == 200
@@ -152,15 +156,15 @@ class TestQuery:
         assert rows[0]["question"] == "Sino si Leni Robredo?"
 
     def test_answered_question_is_not_logged(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
-        with patch("api.main.get_rag", return_value=_mock_rag()):
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        with patch("api.query.get_rag", return_value=_mock_rag()):
             client.post("/query", json={"question": "What bills were passed?"})
         resp = client.get("/unanswered")
         assert resp.json()["questions"] == []
 
     def test_unanswered_logs_source_type(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
-        with patch("api.main.get_rag", return_value=_mock_rag_no_answer()):
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        with patch("api.query.get_rag", return_value=_mock_rag_no_answer()):
             client.post("/query", json={"question": "Ano ang SALN ni Marcos?", "source_type": "saln"})
         rows = client.get("/unanswered").json()["questions"]
         assert rows[0]["source_type"] == "saln"
@@ -168,18 +172,18 @@ class TestQuery:
 
 class TestScrape:
     def test_trigger_returns_202(self):
-        with patch("api.main._run_scrape_job"):
+        with patch("api.scrape._run_scrape_job"):
             resp = client.post("/scrape", json={})
         assert resp.status_code == 202
 
     def test_trigger_returns_job_id_and_pending_status(self):
-        with patch("api.main._run_scrape_job"):
+        with patch("api.scrape._run_scrape_job"):
             data = client.post("/scrape", json={}).json()
         assert "job_id" in data
         assert data["status"] == "pending"
 
     def test_trigger_with_valid_sources(self):
-        with patch("api.main._run_scrape_job"):
+        with patch("api.scrape._run_scrape_job"):
             resp = client.post("/scrape", json={"sources": ["news", "senators"]})
         assert resp.status_code == 202
 
@@ -195,17 +199,17 @@ class TestScrape:
     def test_all_valid_sources_accepted(self):
         all_sources = ["senate_bills", "senators", "gazette", "house_bills",
                        "house_members", "comelec", "news"]
-        with patch("api.main._run_scrape_job"):
+        with patch("api.scrape._run_scrape_job"):
             resp = client.post("/scrape", json={"sources": all_sources})
         assert resp.status_code == 202
 
     def test_null_sources_triggers_full_scrape(self):
-        with patch("api.main._run_scrape_job"):
+        with patch("api.scrape._run_scrape_job"):
             resp = client.post("/scrape", json={"sources": None})
         assert resp.status_code == 202
 
     def test_job_added_to_store(self):
-        with patch("api.main._run_scrape_job"):
+        with patch("api.scrape._run_scrape_job"):
             job_id = client.post("/scrape", json={}).json()["job_id"]
         assert job_id in _jobs
 
@@ -217,7 +221,7 @@ class TestScrape:
             _jobs[job_id]["finished_at"] = "2025-01-01T00:01:00"
             _jobs[job_id]["stats"] = {"ingestion": {"total_chunks": 5}}
 
-        with patch("api.main._run_scrape_job", side_effect=fake_job):
+        with patch("api.scrape._run_scrape_job", side_effect=fake_job):
             job_id = client.post("/scrape", json={"sources": ["news"]}).json()["job_id"]
 
         # TestClient runs background tasks synchronously
@@ -280,29 +284,26 @@ class TestScrapeStatus:
 # ---------------------------------------------------------------------------
 
 class TestClearCache:
-    def test_returns_200(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
+    def test_returns_200(self):
         assert client.delete("/cache").status_code == 200
 
     def test_clears_all_cached_entries(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
         mock_rag = _mock_rag("Answer.")
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             client.post("/query", json={"question": "Who is the president?"})
         assert mock_rag.query.call_count == 1
 
         client.delete("/cache")
 
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             client.post("/query", json={"question": "Who is the president?"})
         assert mock_rag.query.call_count == 2  # cache was empty, RAG called again
 
     def test_returns_deleted_count(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
         mock_rag = _mock_rag("Answer.")
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             client.post("/query", json={"question": "Who is the president?"})
             client.post("/query", json={"question": "What is the capital?"})
         data = client.delete("/cache").json()
@@ -312,58 +313,52 @@ class TestClearCache:
 class TestQueryCache:
     def test_cache_hit_skips_rag_call(self, tmp_path, monkeypatch):
         """Second identical question returns cached answer without calling RAG."""
-        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
         mock_rag = _mock_rag("Cached answer.")
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             client.post("/query", json={"question": "Who is the president?"})
             client.post("/query", json={"question": "Who is the president?"})
         assert mock_rag.query.call_count == 1
 
     def test_cache_hit_returns_same_answer(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
         mock_rag = _mock_rag("The president is Marcos Jr.")
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             r1 = client.post("/query", json={"question": "Who is the president?"}).json()
             r2 = client.post("/query", json={"question": "Who is the president?"}).json()
         assert r1["answer"] == r2["answer"] == "The president is Marcos Jr."
 
     def test_cache_key_is_case_insensitive(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
         mock_rag = _mock_rag("Answer.")
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             client.post("/query", json={"question": "Who is the president?"})
             client.post("/query", json={"question": "WHO IS THE PRESIDENT?"})
         assert mock_rag.query.call_count == 1
 
     def test_cache_key_strips_whitespace(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
         mock_rag = _mock_rag("Answer.")
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             client.post("/query", json={"question": "Who is the president?"})
             client.post("/query", json={"question": "  Who is the president?  "})
         assert mock_rag.query.call_count == 1
 
     def test_different_source_type_is_different_cache_entry(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
         mock_rag = _mock_rag("Answer.")
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             client.post("/query", json={"question": "Who is the president?", "source_type": "news"})
             client.post("/query", json={"question": "Who is the president?", "source_type": "bill"})
         assert mock_rag.query.call_count == 2
 
     def test_scrape_completion_clears_cache(self, tmp_path, monkeypatch):
         """After a successful scrape job, the cache is wiped so fresh data is served."""
-        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
-        monkeypatch.setattr(main_module, "PROGRESS_FILE", tmp_path / "progress.json")
+        monkeypatch.setattr(scrape_module, "PROGRESS_FILE", tmp_path / "progress.json")
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
 
         mock_rag = _mock_rag("Answer.")
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             client.post("/query", json={"question": "Who is the president?"})
         assert mock_rag.query.call_count == 1
 
@@ -375,16 +370,15 @@ class TestQueryCache:
             _run_scrape_job(job_id, ScrapeRequest(embed=True))
 
         # Same question must call RAG again
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             client.post("/query", json={"question": "Who is the president?"})
         assert mock_rag.query.call_count == 2
 
     def test_unanswered_not_logged_twice_on_cache_hit(self, tmp_path, monkeypatch):
         """A cached no-answer result is served from cache; unanswered is logged only once."""
-        monkeypatch.setattr(main_module, "QUERY_CACHE_DB", tmp_path / "cache.db")
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
         mock_rag = _mock_rag_no_answer()
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             client.post("/query", json={"question": "Sino si Leni Robredo?"})
             client.post("/query", json={"question": "Sino si Leni Robredo?"})
         rows = client.get("/unanswered").json()["questions"]
@@ -474,7 +468,7 @@ class TestRunScrapeJob:
 
     def test_checkpoints_sources_done_after_each_source(self, tmp_path, monkeypatch):
         """Progress file is updated after each source is scraped."""
-        monkeypatch.setattr(main_module, "PROGRESS_FILE", tmp_path / "progress.json")
+        monkeypatch.setattr(scrape_module, "PROGRESS_FILE", tmp_path / "progress.json")
         job_id = self._make_job()
 
         def per_source_ingest(sources, **kwargs):
@@ -491,7 +485,7 @@ class TestRunScrapeJob:
     def test_resume_skips_completed_sources(self, tmp_path, monkeypatch):
         """With resume=True, sources already in progress file are not re-scraped."""
         progress_file = tmp_path / "progress.json"
-        monkeypatch.setattr(main_module, "PROGRESS_FILE", progress_file)
+        monkeypatch.setattr(scrape_module, "PROGRESS_FILE", progress_file)
         progress_file.write_text(json.dumps({
             "job_id": "old-job",
             "sources_requested": ["news", "senate_bills"],
@@ -512,7 +506,7 @@ class TestRunScrapeJob:
     def test_resume_false_ignores_existing_progress(self, tmp_path, monkeypatch):
         """Without resume=True, a fresh run always scrapes all requested sources."""
         progress_file = tmp_path / "progress.json"
-        monkeypatch.setattr(main_module, "PROGRESS_FILE", progress_file)
+        monkeypatch.setattr(scrape_module, "PROGRESS_FILE", progress_file)
         progress_file.write_text(json.dumps({
             "sources_done": ["news", "senate_bills"],
             "status": "running",
@@ -536,9 +530,9 @@ class TestPopularQuestions:
         assert data["questions"] == []
 
     def test_returns_questions_sorted_by_total_asks(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
         mock_rag = _mock_rag("Answer.")
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             client.post("/query", json={"question": "Who is the president?"})
             client.post("/query", json={"question": "What bills passed this year?"})
             client.post("/query", json={"question": "Who is the president?"})  # cache hit
@@ -548,27 +542,27 @@ class TestPopularQuestions:
         assert data["questions"][1]["question"] == "What bills passed this year?"
 
     def test_includes_total_asks_count(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
         mock_rag = _mock_rag("Answer.")
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             client.post("/query", json={"question": "Who is the president?"})
             client.post("/query", json={"question": "Who is the president?"})  # cache hit
         data = client.get("/popular").json()
         assert data["questions"][0]["total_asks"] == 2
 
     def test_default_limit_is_10(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
         mock_rag = _mock_rag("Answer.")
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             for i in range(15):
                 client.post("/query", json={"question": f"Question number {i} long enough"})
         data = client.get("/popular").json()
         assert len(data["questions"]) == 10
 
     def test_limit_param_limits_results(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        monkeypatch.setattr(unanswered_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
         mock_rag = _mock_rag("Answer.")
-        with patch("api.main.get_rag", return_value=mock_rag):
+        with patch("api.query.get_rag", return_value=mock_rag):
             for i in range(5):
                 client.post("/query", json={"question": f"Question number {i} long enough"})
         data = client.get("/popular?limit=3").json()
