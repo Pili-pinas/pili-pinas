@@ -26,7 +26,7 @@ from pathlib import Path
 # Allow imports from backend/src
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -537,6 +537,32 @@ def clear_cache():
         return {"deleted": deleted}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not clear cache: {e}")
+
+
+@app.get(
+    "/popular",
+    tags=["query"],
+    summary="Most frequently asked questions",
+    response_description="Questions sorted by number of times asked.",
+)
+def popular_questions(
+    limit: int = Query(10, ge=1, le=100, description="Maximum number of questions to return."),
+):
+    """Returns the most frequently asked questions, sorted by ask count descending."""
+    try:
+        _init_cache_db()
+        with sqlite3.connect(QUERY_CACHE_DB) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """SELECT question, source_type, hit_count + 1 AS total_asks, cached_at
+                   FROM query_cache
+                   ORDER BY hit_count DESC
+                   LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return {"questions": [dict(r) for r in rows]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not fetch popular questions: {e}")
 
 
 @app.post(

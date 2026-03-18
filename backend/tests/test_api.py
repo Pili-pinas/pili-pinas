@@ -525,3 +525,51 @@ class TestRunScrapeJob:
             _run_scrape_job(job_id, ScrapeRequest(sources=["news", "senate_bills"], resume=False, embed=False))
 
         assert mock_ingest.call_count == 2  # both sources scraped from scratch
+
+
+class TestPopularQuestions:
+    def test_returns_200(self):
+        assert client.get("/popular").status_code == 200
+
+    def test_returns_empty_when_no_queries(self):
+        data = client.get("/popular").json()
+        assert data["questions"] == []
+
+    def test_returns_questions_sorted_by_total_asks(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        mock_rag = _mock_rag("Answer.")
+        with patch("api.main.get_rag", return_value=mock_rag):
+            client.post("/query", json={"question": "Who is the president?"})
+            client.post("/query", json={"question": "What bills passed this year?"})
+            client.post("/query", json={"question": "Who is the president?"})  # cache hit
+            client.post("/query", json={"question": "Who is the president?"})  # cache hit
+        data = client.get("/popular").json()
+        assert data["questions"][0]["question"] == "Who is the president?"
+        assert data["questions"][1]["question"] == "What bills passed this year?"
+
+    def test_includes_total_asks_count(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        mock_rag = _mock_rag("Answer.")
+        with patch("api.main.get_rag", return_value=mock_rag):
+            client.post("/query", json={"question": "Who is the president?"})
+            client.post("/query", json={"question": "Who is the president?"})  # cache hit
+        data = client.get("/popular").json()
+        assert data["questions"][0]["total_asks"] == 2
+
+    def test_default_limit_is_10(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        mock_rag = _mock_rag("Answer.")
+        with patch("api.main.get_rag", return_value=mock_rag):
+            for i in range(15):
+                client.post("/query", json={"question": f"Question number {i} long enough"})
+        data = client.get("/popular").json()
+        assert len(data["questions"]) == 10
+
+    def test_limit_param_limits_results(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main_module, "UNANSWERED_DB", tmp_path / "unanswered.db")
+        mock_rag = _mock_rag("Answer.")
+        with patch("api.main.get_rag", return_value=mock_rag):
+            for i in range(5):
+                client.post("/query", json={"question": f"Question number {i} long enough"})
+        data = client.get("/popular?limit=3").json()
+        assert len(data["questions"]) == 3
