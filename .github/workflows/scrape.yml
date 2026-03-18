@@ -16,16 +16,29 @@ jobs:
           for i in $(seq 1 12); do
             if curl -sf "$API_URL/health"; then
               echo "API is up after attempt $i"
-              break
+              exit 0
             fi
             echo "Waiting for machine to start... ($i/12)"
             sleep 15
           done
+          echo "API did not come up after 3 minutes — aborting"
+          exit 1
         env:
           API_URL: ${{ vars.PILI_PINAS_API_URL }}
 
       - name: Trigger scrape job
         run: |
+          _wait_for_api() {
+            for i in $(seq 1 20); do
+              if curl -sf "$API_URL/health" > /dev/null; then
+                return 0
+              fi
+              echo "  waiting for API... ($i/20)"
+              sleep 15
+            done
+            return 1
+          }
+
           _trigger_job() {
             local resume="$1"
             curl -sf -X POST "$API_URL/scrape" \
@@ -61,23 +74,29 @@ jobs:
             return 1
           }
 
-          # First attempt
+          # First attempt (resume=false)
           JOB=$(_trigger_job false)
           echo "Job started: $JOB"
           JOB_ID=$(echo "$JOB" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
           _poll_job "$JOB_ID"
           POLL_RC=$?
 
-          # If machine restarted (404), retry once with resume=true
-          if [[ "$POLL_RC" == "2" ]]; then
-            echo "Retrying with resume=true after machine restart..."
+          # Retry up to 3 times if container crashes (404 = job lost after restart)
+          RESTART_COUNT=0
+          while [[ "$POLL_RC" == "2" && "$RESTART_COUNT" -lt 3 ]]; do
+            RESTART_COUNT=$((RESTART_COUNT + 1))
+            echo "Container restart detected (attempt $RESTART_COUNT/3) — waiting for API to come back..."
             sleep 30
+            if ! _wait_for_api; then
+              echo "API did not recover after container restart — aborting"
+              exit 1
+            fi
             JOB=$(_trigger_job true)
             echo "Resume job started: $JOB"
             JOB_ID=$(echo "$JOB" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
             _poll_job "$JOB_ID"
             POLL_RC=$?
-          fi
+          done
 
           exit $POLL_RC
         env:
