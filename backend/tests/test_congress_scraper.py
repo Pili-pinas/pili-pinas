@@ -163,6 +163,16 @@ class TestHbToDoc:
         assert "RIGHT-OF-WAY ACT" in doc["text"]
         assert "EXPEDITIOUS ACQUISITION" in doc["text"]
 
+    def test_text_includes_authors_when_present(self):
+        bill = {**SAMPLE_HB, "authors_raw": "Cayetano, Alan Peter"}
+        doc = _hb_to_doc(bill, congress=19)
+        assert "Cayetano, Alan Peter" in doc["text"]
+        assert "Authors:" in doc["text"]
+
+    def test_text_without_authors_omits_authors_line(self):
+        doc = _hb_to_doc(SAMPLE_HB, congress=19)  # authors_raw is None
+        assert "Authors:" not in doc["text"]
+
     def test_text_includes_subjects(self):
         doc = _hb_to_doc(SAMPLE_HB, congress=19)
         assert "Infrastructure" in doc["text"]

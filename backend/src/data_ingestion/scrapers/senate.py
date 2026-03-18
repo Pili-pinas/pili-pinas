@@ -116,6 +116,8 @@ def _bill_to_doc(bill: dict, congress: int) -> dict:
     authors_raw = bill.get("authors_raw") or ""
 
     text_parts = [title, long_title]
+    if authors_raw:
+        text_parts.append(f"Authors: {authors_raw}")
     if subjects:
         text_parts.append("Subjects: " + ", ".join(subjects))
 

@@ -150,6 +150,11 @@ class TestBillToDoc:
         assert "NATIONAL PREVENTIVE MECHANISM ACT" in doc["text"]
         assert "AN ACT ESTABLISHING" in doc["text"]
 
+    def test_text_includes_authors(self):
+        doc = _bill_to_doc(SAMPLE_BILL, congress=20)
+        assert "Ejercito Estrada, Jinggoy" in doc["text"]
+        assert "Authors:" in doc["text"]
+
     def test_text_includes_subjects(self):
         doc = _bill_to_doc(SAMPLE_BILL, congress=20)
         assert "Torture Prevention" in doc["text"]
@@ -159,6 +164,11 @@ class TestBillToDoc:
         bill = {**SAMPLE_BILL, "subjects": []}
         doc = _bill_to_doc(bill, congress=20)
         assert "Subjects:" not in doc["text"]
+
+    def test_text_without_authors_omits_authors_line(self):
+        bill = {**SAMPLE_BILL, "authors_raw": None}
+        doc = _bill_to_doc(bill, congress=20)
+        assert "Authors:" not in doc["text"]
 
     def test_missing_date_falls_back_to_today(self):
         from datetime import datetime
