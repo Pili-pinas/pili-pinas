@@ -57,9 +57,54 @@ POLITICS_KEYWORDS = [
     "impeach", "resign", "appoint", "saln", "corruption", "plunder",
     # Parties / coalitions (generic)
     "political party", "coalition", "opposition", "administration",
-    # High-profile names (add more as relevant)
-    "marcos", "duterte", "robredo", "cayetano", "lacson", "escudero",
-    "bongbong", "sara", "leni",
+    # Presidents & Vice Presidents
+    "marcos", "bongbong", "bbm",
+    "duterte", "rody", "digong",
+    "sara duterte", "inday sara",
+    "robredo", "leni",
+    # Senators — 2016 batch
+    "drilon", "recto", "sotto", "tito sotto",
+    "gordon", "lacson", "ping lacson",
+    "pangilinan", "kiko",
+    "zubiri", "migz",
+    "de lima", "leila",
+    "gatchalian", "win gatchalian",
+    "hontiveros", "risa",
+    "pacquiao", "manny pacquiao",
+    "villanueva", "joel villanueva",
+    # Senators — 2019 batch
+    "villar", "cynthia villar",
+    "poe", "grace poe",
+    "bong go",
+    "cayetano", "pia cayetano", "alan peter cayetano",
+    "dela rosa", "bato",
+    "angara", "sonny angara",
+    "lapid", "lito lapid",
+    "imee marcos",
+    "tolentino", "francis tolentino",
+    "pimentel", "koko",
+    "revilla", "bong revilla",
+    "binay", "nancy binay",
+    # Senators — 2022 batch
+    "padilla", "robin padilla",
+    "legarda", "loren",
+    "raffy tulfo",
+    "escudero", "chiz",
+    "mark villar",
+    "jv ejercito", "jinggoy estrada",
+    # Senators — 2025 batch
+    "bam aquino",
+    "erwin tulfo",
+    "marcoleta",
+    "camille villar",
+    # House Speakers & prominent representatives
+    "romualdez", "martin romualdez",
+    "arroyo", "gloria macapagal",
+    "velasco", "lord allan",
+    "alvarez", "bebot alvarez",
+    "dy", "bojie dy",
+    "salceda", "joey salceda",
+    "sandro marcos",
 ]
 
 _KEYWORDS_LOWER = [kw.lower() for kw in POLITICS_KEYWORDS]
