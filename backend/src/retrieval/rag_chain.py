@@ -26,13 +26,28 @@ from sentence_transformers import SentenceTransformer
 from embeddings.base import VectorStore
 from embeddings.model import get_embedding_model
 from embeddings.vector_store import get_vector_store
-from retrieval.prompts import RAG_SYSTEM_PROMPT, RAG_USER_PROMPT_TEMPLATE, NO_CONTEXT_RESPONSE
+from retrieval.prompts import RAG_SYSTEM_PROMPT, RAG_USER_PROMPT_TEMPLATE, NO_CONTEXT_RESPONSE, AGENTIC_SYSTEM_PROMPT
+from retrieval.tools import TOOLS, execute_tool
+from data_ingestion.document_index import DB_PATH
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TOP_K = 5
+MAX_AGENTIC_TURNS = 5
 
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+
+_AGGREGATION_SIGNALS = [
+    "most", "least", "how many", "count", "rank", "top ",
+    "who has the most", "biggest advocate", "compare", "advocate for",
+    "champion of", "filed the most", "authored the most",
+]
+
+
+def _is_aggregation_query(question: str) -> bool:
+    """Return True if the question requires counting/ranking across all documents."""
+    q = question.lower()
+    return any(signal in q for signal in _AGGREGATION_SIGNALS)
 
 
 @dataclass
@@ -49,6 +64,7 @@ class PiliPinasRAG:
     def __init__(self, top_k: int = DEFAULT_TOP_K):
         self.top_k = top_k
         self._store: Optional[VectorStore] = None
+        self._agentic_db_path = DB_PATH
 
     def _get_embedding_model(self) -> SentenceTransformer:
         return get_embedding_model()
@@ -58,13 +74,14 @@ class PiliPinasRAG:
             self._store = get_vector_store()
         return self._store
 
-    def retrieve(self, question: str, source_type: Optional[str] = None) -> list[dict]:
+    def retrieve(self, question: str, source_type: Optional[str] = None, n: Optional[int] = None) -> list[dict]:
         """
-        Retrieve top-k relevant chunks for the question.
+        Retrieve relevant chunks for the question.
 
         Args:
             question: User's question.
             source_type: Optional filter (e.g. 'bill', 'news', 'profile').
+            n: Number of results (overrides self.top_k when provided).
 
         Returns:
             List of chunk dicts with text + metadata.
@@ -75,7 +92,7 @@ class PiliPinasRAG:
             logger.warning("Vector store is empty — no documents to retrieve. Run /scrape to ingest data.")
             return []
 
-        n_results = min(self.top_k, doc_count)
+        n_results = min(n if n is not None else self.top_k, doc_count)
         model = self._get_embedding_model()
         query_embedding = model.encode([question], normalize_embeddings=True).tolist()
 
@@ -124,6 +141,72 @@ class PiliPinasRAG:
         logger.info(f"LLM response received: {len(text)} chars, input_tokens={message.usage.input_tokens} output_tokens={message.usage.output_tokens}")
         return text
 
+    def query_agentic(self, question: str) -> RAGResult:
+        """
+        Agentic RAG query using Claude tool use.
+        Claude decides which tools to call (search_documents / query_database).
+        Used for aggregation and ranking questions.
+
+        Returns:
+            RAGResult with answer and sources.
+        """
+        import anthropic
+        logger.info(f"Agentic query: {question!r}")
+        client = anthropic.Anthropic()
+        messages = [{"role": "user", "content": question}]
+        final_answer = ""
+
+        for turn in range(MAX_AGENTIC_TURNS):
+            response = client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=2048,
+                system=AGENTIC_SYSTEM_PROMPT,
+                messages=messages,
+                tools=TOOLS,
+            )
+            logger.info(f"Agentic turn {turn + 1}: stop_reason={response.stop_reason}")
+
+            if response.stop_reason == "end_turn":
+                for block in response.content:
+                    if block.type == "text":
+                        final_answer = block.text
+                        break
+                break
+
+            if response.stop_reason == "tool_use":
+                # Append assistant message
+                messages.append({"role": "assistant", "content": response.content})
+
+                # Execute each tool call and collect results
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        logger.info(f"Executing tool: {block.name} input={block.input}")
+                        result = execute_tool(block.name, block.input, self, self._agentic_db_path)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result,
+                        })
+
+                messages.append({"role": "user", "content": tool_results})
+            else:
+                # Unexpected stop reason — extract any text and stop
+                for block in response.content:
+                    if hasattr(block, "text"):
+                        final_answer = block.text
+                break
+
+        if not final_answer:
+            final_answer = NO_CONTEXT_RESPONSE
+
+        return RAGResult(
+            answer=final_answer,
+            sources=[],
+            query=question,
+            chunks_used=0,
+        )
+
     def query(
         self,
         question: str,
@@ -132,6 +215,7 @@ class PiliPinasRAG:
     ) -> RAGResult:
         """
         Full RAG query: retrieve + generate.
+        Routes aggregation questions to query_agentic().
 
         Args:
             question: User's question (Filipino, English, or Taglish).
@@ -142,6 +226,10 @@ class PiliPinasRAG:
             RAGResult with answer and sources.
         """
         logger.info(f"Query: {question!r}")
+
+        if _is_aggregation_query(question):
+            logger.info("Routing to agentic RAG (aggregation query detected)")
+            return self.query_agentic(question)
 
         # Retrieve
         chunks = self.retrieve(question, source_type=source_type)

@@ -23,6 +23,7 @@ from data_ingestion.scrapers.congress import scrape_house_bills, scrape_members
 from data_ingestion.scrapers.comelec import scrape_all_comelec
 from data_ingestion.scrapers.news_sites import scrape_all_news
 from data_ingestion.processors.html_processor import process_html_document
+from data_ingestion.document_index import upsert_documents
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,8 @@ def run_ingestion(
                 logger.warning(f"Skipping doc with no text: {doc.get('title', '')[:50]}")
         if chunks:
             save_documents(chunks, collection)
+        if raw_docs:
+            upsert_documents(raw_docs)
         stats["counts"][collection] = len(chunks)
         return len(chunks)
 

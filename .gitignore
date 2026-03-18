@@ -33,6 +33,7 @@ backend/data/metadata.json
 
 # Vector DB — regenerate from embeddings pipeline
 backend/vector_db/
+vector_db/
 
 # Logs
 *.log
