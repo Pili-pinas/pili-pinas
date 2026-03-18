@@ -56,8 +56,8 @@ jobs:
                 "$API_URL/scrape/$job_id" -H "X-API-Key: $API_KEY")
               STATUS=$(cat /tmp/scrape_status.json)
               echo "[$i] http=$HTTP_CODE raw: $STATUS"
-              if [[ "$HTTP_CODE" == "404" ]]; then
-                echo "Job not found (machine restarted) — will resume"
+              if [[ "$HTTP_CODE" == "404" || "$HTTP_CODE" == "503" ]]; then
+                echo "Container unavailable (http=$HTTP_CODE) — will resume"
                 return 2
               fi
               STATE=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "parse_error")
@@ -81,7 +81,7 @@ jobs:
           _poll_job "$JOB_ID"
           POLL_RC=$?
 
-          # Retry up to 3 times if container crashes (404 = job lost after restart)
+          # Retry up to 3 times if container crashes (404 = job lost, 503 = temporarily unavailable)
           RESTART_COUNT=0
           while [[ "$POLL_RC" == "2" && "$RESTART_COUNT" -lt 3 ]]; do
             RESTART_COUNT=$((RESTART_COUNT + 1))
