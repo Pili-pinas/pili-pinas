@@ -17,8 +17,8 @@ cd "$REPO_ROOT"
 MAX_LAWS="${1:-1000}"
 
 echo "=== Pili-Pinas Historical Backfill ==="
-echo "Sources   : senate_bills senators gazette house_bills house_members comelec fact_check oversight statistics research financial"
-echo "Congresses: 17 18 19 20"
+echo "Sources   : senate_bills senators gazette house_bills house_members comelec fact_check oversight statistics research financial politicians"
+echo "Congresses: 16 17 18 19 20"
 echo "Elections : 2016 2019 2022 2025"
 echo "Max bills : 500 per congress"
 echo "Max laws  : $MAX_LAWS"
@@ -36,8 +36,8 @@ echo ""
 echo "--- Step 1/2: Ingestion ---"
 uv run --project "$BACKEND" python backend/src/data_ingestion/ingestion.py \
   --sources senate_bills senators gazette house_bills house_members comelec \
-    fact_check oversight statistics research financial \
-  --congresses 17 18 19 20 \
+    fact_check oversight statistics research financial politicians \
+  --congresses 16 17 18 19 20 \
   --election-years 2016 2019 2022 2025 \
   --max-pages 500 \
   --max-laws "$MAX_LAWS"
