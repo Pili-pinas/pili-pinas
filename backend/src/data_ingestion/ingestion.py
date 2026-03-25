@@ -27,6 +27,7 @@ from data_ingestion.scrapers.oversight import scrape_all_oversight
 from data_ingestion.scrapers.statistics import scrape_all_statistics
 from data_ingestion.scrapers.research import scrape_all_research
 from data_ingestion.scrapers.financial import scrape_all_financial
+from data_ingestion.scrapers.politicians import scrape_all_politicians
 from data_ingestion.processors.html_processor import process_html_document
 from data_ingestion.document_index import upsert_documents
 
@@ -100,11 +101,16 @@ def run_ingestion(
         "senate_bills", "senators", "gazette",
         "house_bills", "house_members", "comelec", "news",
         "fact_check", "oversight", "statistics", "research", "financial",
+        "politicians",
     ]
     sources = sources or all_sources
     congresses = congresses or [_CURRENT_CONGRESS]
     election_years = election_years or [_CURRENT_ELECTION_YEAR]
     stats = {"sources": sources, "counts": {}}
+
+    # Collect raw bill docs across all bill scrapers so politician profiles
+    # can be enriched with authored-bill history in a single pass.
+    _collected_bills: list[dict] = []
 
     def _process_and_save(raw_docs: list[dict], collection: str) -> int:
         """Process raw docs into chunks and save."""
@@ -128,6 +134,7 @@ def run_ingestion(
             logger.info(f"Scraping Senate bills — Congress {c}")
             all_docs.extend(scrape_senate_bills(congress=c, max_items=max_pages))
         _process_and_save(all_docs, "senate_bills")
+        _collected_bills.extend(all_docs)
 
     if "senators" in sources:
         logger.info("=== Senator Profiles ===")
@@ -146,6 +153,7 @@ def run_ingestion(
             logger.info(f"Scraping House bills — Congress {c}")
             all_docs.extend(scrape_house_bills(congress=c, max_items=max_pages))
         _process_and_save(all_docs, "house_bills")
+        _collected_bills.extend(all_docs)
 
     if "house_members" in sources:
         logger.info("=== House Members ===")
@@ -192,6 +200,11 @@ def run_ingestion(
         docs = scrape_all_financial(max_items=max_news)
         _process_and_save(docs, "financial")
 
+    if "politicians" in sources:
+        logger.info(f"=== Politician Profiles (bills available: {len(_collected_bills)}) ===")
+        docs = scrape_all_politicians(bills=_collected_bills)
+        _process_and_save(docs, "politicians")
+
     total = sum(stats["counts"].values())
     stats["total_chunks"] = total
     update_metadata(stats)
@@ -214,7 +227,8 @@ if __name__ == "__main__":
         "--sources", nargs="+",
         choices=["senate_bills", "senators", "gazette", "house_bills",
                  "house_members", "comelec", "news",
-                 "fact_check", "oversight", "statistics", "research", "financial"],
+                 "fact_check", "oversight", "statistics", "research", "financial",
+                 "politicians"],
         help="Sources to ingest (default: all)"
     )
     parser.add_argument("--congresses", nargs="+", type=int, default=None,
