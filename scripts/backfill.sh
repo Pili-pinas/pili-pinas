@@ -18,10 +18,11 @@ MAX_LAWS="${1:-1000}"
 
 echo "=== Pili-Pinas Historical Backfill ==="
 echo "Sources   : senate_bills senators gazette house_bills house_members comelec fact_check oversight statistics research financial politicians"
-echo "Congresses: 16 17 18 19 20"
-echo "Elections : 2016 2019 2022 2025"
-echo "Max bills : 500 per congress"
-echo "Max laws  : $MAX_LAWS"
+echo "Congresses: 13 14 15 16 17 18 19 20"
+echo "Elections : 2007 2010 2013 2016 2019 2022 2025"
+echo "Max bills : 2000 per congress"
+echo "Max laws  : $MAX_LAWS (cutoff: 2006)"
+echo "Max items : 200 per supplemental source"
 echo ""
 
 # Clear the seen-URLs tracker so the next daily news scrape re-fetches
@@ -37,10 +38,12 @@ echo "--- Step 1/2: Ingestion ---"
 uv run --project "$BACKEND" python backend/src/data_ingestion/ingestion.py \
   --sources senate_bills senators gazette house_bills house_members comelec \
     fact_check oversight statistics research financial politicians \
-  --congresses 16 17 18 19 20 \
-  --election-years 2016 2019 2022 2025 \
-  --max-pages 500 \
-  --max-laws "$MAX_LAWS"
+  --congresses 13 14 15 16 17 18 19 20 \
+  --election-years 2007 2010 2013 2016 2019 2022 2025 \
+  --max-pages 2000 \
+  --max-news 200 \
+  --max-laws "$MAX_LAWS" \
+  --gazette-from-year 2006
 
 echo ""
 echo "--- Step 2/2: Embeddings ---"
