@@ -44,12 +44,37 @@ class TestGetEmbeddingModel:
 
     def test_uses_multilingual_model(self):
         from embeddings.model import get_embedding_model, EMBEDDING_MODEL
-        with patch("embeddings.model.SentenceTransformer") as mock_cls:
+        with patch("embeddings.model.SentenceTransformer") as mock_cls, \
+             patch("embeddings.model._detect_device", return_value="cpu"):
             mock_cls.return_value = MagicMock()
             get_embedding_model()
-        mock_cls.assert_called_once_with(EMBEDDING_MODEL)
+        args, kwargs = mock_cls.call_args
+        assert args[0] == EMBEDDING_MODEL
+
+    def test_passes_device_to_sentence_transformer(self):
+        from embeddings.model import get_embedding_model
+        with patch("embeddings.model.SentenceTransformer") as mock_cls, \
+             patch("embeddings.model._detect_device", return_value="cpu"):
+            mock_cls.return_value = MagicMock()
+            get_embedding_model()
+        _, kwargs = mock_cls.call_args
+        assert kwargs.get("device") == "cpu"
+
+    def test_env_var_overrides_device(self, monkeypatch):
+        import embeddings.model as m
+        monkeypatch.setenv("EMBEDDING_DEVICE", "cpu")
+        with patch("embeddings.model.SentenceTransformer") as mock_cls:
+            mock_cls.return_value = MagicMock()
+            m.get_embedding_model()
+        _, kwargs = mock_cls.call_args
+        assert kwargs.get("device") == "cpu"
 
     def test_model_name_is_multilingual_minilm(self):
         from embeddings.model import EMBEDDING_MODEL
         assert "multilingual" in EMBEDDING_MODEL
         assert "MiniLM" in EMBEDDING_MODEL
+
+    def test_detect_device_returns_string(self):
+        from embeddings.model import _detect_device
+        device = _detect_device()
+        assert device in ("cuda", "mps", "cpu")

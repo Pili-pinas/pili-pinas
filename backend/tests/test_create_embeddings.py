@@ -17,7 +17,7 @@ from embeddings.create_embeddings import (
     load_jsonl,
     embed_collection,
     run_embedding_pipeline,
-    BATCH_SIZE,
+    DEFAULT_BATCH_SIZE as BATCH_SIZE,
 )
 
 
