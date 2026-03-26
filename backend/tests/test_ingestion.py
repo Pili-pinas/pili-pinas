@@ -145,6 +145,49 @@ class TestRunIngestion:
         ingestion.run_ingestion(sources=["news"])
         assert (patched_dirs / "metadata.json").exists()
 
+    def test_politicians_source_skips_senators_scraper(self, patched_dirs, monkeypatch):
+        senators_mock = MagicMock(return_value=[])
+        politicians_mock = MagicMock(return_value=[])
+        monkeypatch.setattr(ingestion, "scrape_senators", senators_mock)
+        monkeypatch.setattr(ingestion, "scrape_all_politicians", politicians_mock)
+        monkeypatch.setattr(ingestion, "scrape_senate_bills", MagicMock(return_value=[]))
+        monkeypatch.setattr(ingestion, "scrape_laws", MagicMock(return_value=[]))
+        monkeypatch.setattr(ingestion, "scrape_house_bills", MagicMock(return_value=[]))
+        monkeypatch.setattr(ingestion, "scrape_members", MagicMock(return_value=[]))
+        monkeypatch.setattr(ingestion, "scrape_all_comelec", MagicMock(return_value=[]))
+        monkeypatch.setattr(ingestion, "scrape_all_news", MagicMock(return_value=[]))
+        monkeypatch.setattr(ingestion, "process_html_document", MagicMock(return_value=[]))
+
+        ingestion.run_ingestion(sources=["senators", "politicians"])
+        senators_mock.assert_not_called()
+        politicians_mock.assert_called_once()
+
+    def test_politicians_source_skips_house_members_scraper(self, patched_dirs, monkeypatch):
+        members_mock = MagicMock(return_value=[])
+        politicians_mock = MagicMock(return_value=[])
+        monkeypatch.setattr(ingestion, "scrape_members", members_mock)
+        monkeypatch.setattr(ingestion, "scrape_all_politicians", politicians_mock)
+        monkeypatch.setattr(ingestion, "scrape_senate_bills", MagicMock(return_value=[]))
+        monkeypatch.setattr(ingestion, "scrape_senators", MagicMock(return_value=[]))
+        monkeypatch.setattr(ingestion, "scrape_laws", MagicMock(return_value=[]))
+        monkeypatch.setattr(ingestion, "scrape_house_bills", MagicMock(return_value=[]))
+        monkeypatch.setattr(ingestion, "scrape_all_comelec", MagicMock(return_value=[]))
+        monkeypatch.setattr(ingestion, "scrape_all_news", MagicMock(return_value=[]))
+        monkeypatch.setattr(ingestion, "process_html_document", MagicMock(return_value=[]))
+
+        ingestion.run_ingestion(sources=["house_members", "politicians"])
+        members_mock.assert_not_called()
+        politicians_mock.assert_called_once()
+
+    def test_senators_runs_normally_without_politicians(self, patched_dirs, monkeypatch):
+        senators_mock = MagicMock(return_value=[])
+        monkeypatch.setattr(ingestion, "scrape_senators", senators_mock)
+        monkeypatch.setattr(ingestion, "scrape_senate_bills", MagicMock(return_value=[]))
+        monkeypatch.setattr(ingestion, "process_html_document", MagicMock(return_value=[]))
+
+        ingestion.run_ingestion(sources=["senators"])
+        senators_mock.assert_called_once()
+
     def test_docs_with_no_text_are_skipped(self, patched_dirs, monkeypatch):
         monkeypatch.setattr(ingestion, "scrape_all_news", MagicMock(return_value=[
             {"title": "No text doc", "url": "https://example.com"}  # no "text" key

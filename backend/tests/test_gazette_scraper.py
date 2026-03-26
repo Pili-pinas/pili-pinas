@@ -313,3 +313,47 @@ class TestScrapeLaws:
              patch("data_ingestion.scrapers.official_gazette._fetch_ra_page", return_value=None):
             docs = scrape_laws(max_items=10)
         assert docs == []
+
+    # --- from_year ---
+
+    def test_from_year_excludes_laws_older_than_cutoff(self):
+        old_row = ["REPUBLIC ACT NO. 9000", "2004-06-15",
+                   "<a href='https://elibrary.judiciary.gov.ph/x'>Old Act</a>"]
+        page = {"recordsTotal": 3, "data": [ROW_1, ROW_2, old_row]}
+        with patch("data_ingestion.scrapers.official_gazette._fetch_index", return_value="tok"), \
+             patch("data_ingestion.scrapers.official_gazette._fetch_ra_page", return_value=page), \
+             patch("data_ingestion.scrapers.official_gazette._fetch_law_text", return_value=""):
+            docs = scrape_laws(max_items=10, from_year=2006)
+        titles = [d["title"] for d in docs]
+        assert "REPUBLIC ACT NO. 9000" not in titles
+        assert "REPUBLIC ACT NO. 12312" in titles
+
+    def test_from_year_stops_pagination_when_cutoff_reached(self):
+        old_row = ["REPUBLIC ACT NO. 9000", "2004-06-15",
+                   "<a href='https://elibrary.judiciary.gov.ph/x'>Old Act</a>"]
+        page = {"recordsTotal": 100, "data": [ROW_1, old_row]}
+        with patch("data_ingestion.scrapers.official_gazette._fetch_index", return_value="tok"), \
+             patch("data_ingestion.scrapers.official_gazette._fetch_ra_page",
+                   return_value=page) as mock_page, \
+             patch("data_ingestion.scrapers.official_gazette._fetch_law_text", return_value=""):
+            scrape_laws(max_items=100, from_year=2006)
+        # must not request a second page after hitting an old law
+        assert mock_page.call_count == 1
+
+    def test_from_year_none_does_not_stop_early(self):
+        with patch("data_ingestion.scrapers.official_gazette._fetch_index", return_value="tok"), \
+             patch("data_ingestion.scrapers.official_gazette._fetch_ra_page",
+                   side_effect=[API_PAGE_1, API_PAGE_2]), \
+             patch("data_ingestion.scrapers.official_gazette._fetch_law_text", return_value=""):
+            docs = scrape_laws(max_items=3, from_year=None)
+        assert len(docs) == 3
+
+    def test_from_year_includes_laws_exactly_on_boundary(self):
+        boundary_row = ["REPUBLIC ACT NO. 9001", "2006-01-01",
+                        "<a href='https://elibrary.judiciary.gov.ph/y'>Boundary Act</a>"]
+        page = {"recordsTotal": 1, "data": [boundary_row]}
+        with patch("data_ingestion.scrapers.official_gazette._fetch_index", return_value="tok"), \
+             patch("data_ingestion.scrapers.official_gazette._fetch_ra_page", return_value=page), \
+             patch("data_ingestion.scrapers.official_gazette._fetch_law_text", return_value=""):
+            docs = scrape_laws(max_items=10, from_year=2006)
+        assert len(docs) == 1
