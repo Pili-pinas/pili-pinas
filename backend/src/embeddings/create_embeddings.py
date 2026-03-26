@@ -30,8 +30,9 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PROCESSED_DIR = Path(__file__).parents[3] / "data" / "processed"
 PROCESSED_DIR = Path(os.getenv("PROCESSED_DIR", str(_DEFAULT_PROCESSED_DIR)))
 
-# Batch size for embedding generation (tune based on RAM)
-BATCH_SIZE = 64
+# Batch size for embedding generation.
+# CPU default: 64. GPU (MPS/CUDA) users should pass --batch-size 256 or higher.
+DEFAULT_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "64"))
 
 
 def load_model() -> SentenceTransformer:
@@ -59,7 +60,8 @@ def load_jsonl(path: Path) -> list[dict]:
     return docs
 
 
-def embed_collection(jsonl_path: Path, model: SentenceTransformer, store: VectorStore) -> int:
+def embed_collection(jsonl_path: Path, model: SentenceTransformer, store: VectorStore,
+                     batch_size: int = DEFAULT_BATCH_SIZE) -> int:
     """
     Embed all chunks in a JSONL file and upsert into the vector store.
     Returns number of chunks processed.
@@ -72,8 +74,8 @@ def embed_collection(jsonl_path: Path, model: SentenceTransformer, store: Vector
     logger.info(f"Embedding {len(docs)} chunks from {jsonl_path.name}")
 
     # Embed and upsert in batches to keep peak memory low
-    for i in tqdm(range(0, len(docs), BATCH_SIZE), desc=jsonl_path.stem):
-        batch_docs = docs[i : i + BATCH_SIZE]
+    for i in tqdm(range(0, len(docs), batch_size), desc=jsonl_path.stem):
+        batch_docs = docs[i : i + batch_size]
         batch_texts = [d["text"] for d in batch_docs]
         batch_ids = [doc_id(d, i + j) for j, d in enumerate(batch_docs)]
 
@@ -97,7 +99,8 @@ def embed_collection(jsonl_path: Path, model: SentenceTransformer, store: Vector
     return len(docs)
 
 
-def run_embedding_pipeline(collections: list[str] | None = None) -> dict:
+def run_embedding_pipeline(collections: list[str] | None = None,
+                           batch_size: int = DEFAULT_BATCH_SIZE) -> dict:
     """
     Embed all processed JSONL files (or a specified subset).
 
@@ -118,7 +121,7 @@ def run_embedding_pipeline(collections: list[str] | None = None) -> dict:
     total = 0
 
     for path in jsonl_files:
-        count = embed_collection(path, model, store)
+        count = embed_collection(path, model, store, batch_size=batch_size)
         stats[path.stem] = count
         total += count
 
@@ -140,8 +143,12 @@ if __name__ == "__main__":
         "--collections", nargs="+",
         help="JSONL collection names to embed (default: all)"
     )
+    parser.add_argument(
+        "--batch-size", type=int, default=DEFAULT_BATCH_SIZE,
+        help=f"Embedding batch size (default: {DEFAULT_BATCH_SIZE}). Use 256+ for GPU."
+    )
     args = parser.parse_args()
 
-    stats = run_embedding_pipeline(collections=args.collections)
+    stats = run_embedding_pipeline(collections=args.collections, batch_size=args.batch_size)
     total = sum(stats.values())
     print(f"\nDone. {total} chunks embedded into ChromaDB.")
