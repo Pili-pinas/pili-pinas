@@ -162,12 +162,17 @@ def _parse_law_row(row: list) -> dict:
 # Main scraper
 # ---------------------------------------------------------------------------
 
-def scrape_laws(max_items: int = 50) -> list[dict]:
+def scrape_laws(max_items: int = 50, from_year: Optional[int] = None) -> list[dict]:
     """
     Scrape Republic Acts from the Supreme Court E-Library.
 
+    The API returns laws newest-first, so from_year stops pagination as soon
+    as a law older than the cutoff is encountered.
+
     Args:
         max_items: Maximum number of laws to return.
+        from_year: Stop scraping when a law's year is older than this value.
+                   None (default) means no cutoff — scrape up to max_items.
 
     Returns:
         List of document dicts matching the metadata schema.
@@ -182,8 +187,9 @@ def scrape_laws(max_items: int = 50) -> list[dict]:
     documents = []
     page_size = min(50, max_items)
     start = 0
+    cutoff_reached = False
 
-    while len(documents) < max_items:
+    while len(documents) < max_items and not cutoff_reached:
         payload = _fetch_ra_page(session, csrf, start=start, length=page_size)
         if payload is None:
             break
@@ -193,6 +199,15 @@ def scrape_laws(max_items: int = 50) -> list[dict]:
 
         for row in rows:
             doc = _parse_law_row(row)
+
+            if from_year is not None:
+                try:
+                    law_year = int(doc["date"][:4])
+                except (ValueError, TypeError):
+                    law_year = None
+                if law_year is not None and law_year < from_year:
+                    cutoff_reached = True
+                    break
 
             # Fetch full text from detail page if URL is available
             if doc["url"]:

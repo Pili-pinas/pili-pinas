@@ -78,6 +78,7 @@ def run_ingestion(
     max_pages: int = 3,
     max_news: int = 20,
     max_laws: int = 50,
+    gazette_from_year: int | None = None,
 ) -> dict:
     """
     Run the full ingestion pipeline.
@@ -137,13 +138,16 @@ def run_ingestion(
         _collected_bills.extend(all_docs)
 
     if "senators" in sources:
-        logger.info("=== Senator Profiles ===")
-        docs = scrape_senators()
-        _process_and_save(docs, "senators")
+        if "politicians" in sources:
+            logger.info("=== Senator Profiles — skipped (covered by politicians) ===")
+        else:
+            logger.info("=== Senator Profiles ===")
+            docs = scrape_senators()
+            _process_and_save(docs, "senators")
 
     if "gazette" in sources:
-        logger.info(f"=== Official Gazette Laws (max_laws={max_laws}) ===")
-        docs = scrape_laws(max_items=max_laws)
+        logger.info(f"=== Official Gazette Laws (max_laws={max_laws}, from_year={gazette_from_year}) ===")
+        docs = scrape_laws(max_items=max_laws, from_year=gazette_from_year)
         _process_and_save(docs, "gazette_laws")
 
     if "house_bills" in sources:
@@ -156,9 +160,12 @@ def run_ingestion(
         _collected_bills.extend(all_docs)
 
     if "house_members" in sources:
-        logger.info("=== House Members ===")
-        docs = scrape_members()
-        _process_and_save(docs, "house_members")
+        if "politicians" in sources:
+            logger.info("=== House Members — skipped (covered by politicians) ===")
+        else:
+            logger.info("=== House Members ===")
+            docs = scrape_members()
+            _process_and_save(docs, "house_members")
 
     if "comelec" in sources:
         logger.info(f"=== COMELEC (election_years={election_years}) ===")
@@ -238,6 +245,8 @@ if __name__ == "__main__":
     parser.add_argument("--max-pages", type=int, default=3)
     parser.add_argument("--max-news", type=int, default=20)
     parser.add_argument("--max-laws", type=int, default=50)
+    parser.add_argument("--gazette-from-year", type=int, default=None,
+                        help="Stop gazette scraping at laws older than this year (e.g. 2006)")
     args = parser.parse_args()
 
     stats = run_ingestion(
@@ -247,5 +256,6 @@ if __name__ == "__main__":
         max_pages=args.max_pages,
         max_news=args.max_news,
         max_laws=args.max_laws,
+        gazette_from_year=args.gazette_from_year,
     )
     print(f"\nDone. Total chunks: {stats['total_chunks']}")

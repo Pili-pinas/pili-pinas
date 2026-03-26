@@ -168,6 +168,7 @@ def _fetch_all_people() -> list[dict]:
     """Paginate through all BetterGov people records."""
     people = []
     cursor = None
+    page = 0
     while True:
         params: dict = {"limit": 100}
         if cursor:
@@ -183,10 +184,13 @@ def _fetch_all_people() -> list[dict]:
         if not batch:
             break
         people.extend(batch)
+        page += 1
+        logger.info(f"Fetched people page {page} ({len(people)} total so far)")
         pagination = payload.get("pagination", {})
         if not pagination.get("has_more"):
             break
         cursor = pagination.get("next_cursor")
+    logger.info(f"Finished fetching people: {len(people)} records total")
     return people
 
 
