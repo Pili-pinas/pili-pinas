@@ -98,6 +98,121 @@ class TestUpdateMetadata:
         assert len(data) == 1
 
 
+class TestSaveDocumentsAppend:
+    def test_append_mode_adds_to_existing_file(self, patched_dirs):
+        ingestion.save_documents([{"text": "first"}], "col")
+        ingestion.save_documents([{"text": "second"}], "col", append=True)
+        lines = (patched_dirs / "processed" / "col.jsonl").read_text().strip().split("\n")
+        assert len(lines) == 2
+
+    def test_overwrite_mode_clears_existing_file(self, patched_dirs):
+        ingestion.save_documents([{"text": "old"}], "col")
+        ingestion.save_documents([{"text": "new"}], "col", append=False)
+        lines = (patched_dirs / "processed" / "col.jsonl").read_text().strip().split("\n")
+        assert len(lines) == 1
+        assert "new" in lines[0]
+
+
+class TestBackfillCheckpoint:
+    def test_new_checkpoint_has_no_completed_steps(self, tmp_path):
+        cp = ingestion.BackfillCheckpoint(tmp_path / "cp.json", resume=False)
+        assert not cp.is_done("senate_bills:16")
+
+    def test_mark_done_persists_to_file(self, tmp_path):
+        path = tmp_path / "cp.json"
+        cp = ingestion.BackfillCheckpoint(path, resume=False)
+        cp.mark_done("senate_bills:16")
+        assert path.exists()
+        data = json.loads(path.read_text())
+        assert "senate_bills:16" in data["completed"]
+
+    def test_is_done_returns_true_after_mark_done(self, tmp_path):
+        cp = ingestion.BackfillCheckpoint(tmp_path / "cp.json", resume=False)
+        cp.mark_done("gazette")
+        assert cp.is_done("gazette")
+
+    def test_resume_loads_completed_steps_from_file(self, tmp_path):
+        path = tmp_path / "cp.json"
+        path.write_text(json.dumps({"completed": ["senate_bills:16", "senators"]}))
+        cp = ingestion.BackfillCheckpoint(path, resume=True)
+        assert cp.is_done("senate_bills:16")
+        assert cp.is_done("senators")
+        assert not cp.is_done("gazette")
+
+    def test_fresh_run_clears_existing_checkpoint(self, tmp_path):
+        path = tmp_path / "cp.json"
+        path.write_text(json.dumps({"completed": ["senate_bills:16"]}))
+        cp = ingestion.BackfillCheckpoint(path, resume=False)
+        assert not cp.is_done("senate_bills:16")
+        assert not path.exists()
+
+    def test_resume_without_existing_file_starts_fresh(self, tmp_path):
+        cp = ingestion.BackfillCheckpoint(tmp_path / "missing.json", resume=True)
+        assert not cp.is_done("anything")
+
+
+class TestRunIngestionResume:
+    def _bill_doc(self, title="Bill"):
+        return {"text": title, "title": title, "url": "https://example.com",
+                "politician": "Test", "source": "bettergov.ph", "source_type": "bill"}
+
+    def _chunk(self):
+        return [{"text": "chunk", "title": "t", "url": "u", "chunk_index": 0, "chunk_total": 1}]
+
+    def test_resume_skips_completed_congress(self, patched_dirs, monkeypatch, tmp_path):
+        checkpoint_path = tmp_path / "cp.json"
+        checkpoint_path.write_text(json.dumps({"completed": ["senate_bills:16"]}))
+
+        senate_mock = MagicMock(return_value=[])
+        monkeypatch.setattr(ingestion, "scrape_senate_bills", senate_mock)
+        monkeypatch.setattr(ingestion, "scrape_laws", MagicMock(return_value=[]))
+        monkeypatch.setattr(ingestion, "process_html_document", MagicMock(return_value=self._chunk()))
+        monkeypatch.setattr(ingestion, "CHECKPOINT_FILE", checkpoint_path)
+
+        ingestion.run_ingestion(sources=["senate_bills"], congresses=[16, 17], resume=True)
+
+        calls = [c.kwargs.get("congress") or c.args[0] for c in senate_mock.call_args_list]
+        assert 16 not in calls
+        assert 17 in calls
+
+    def test_resume_marks_completed_steps(self, patched_dirs, monkeypatch, tmp_path):
+        checkpoint_path = tmp_path / "cp.json"
+        monkeypatch.setattr(ingestion, "CHECKPOINT_FILE", checkpoint_path)
+        monkeypatch.setattr(ingestion, "scrape_senate_bills",
+                            MagicMock(return_value=[self._bill_doc()]))
+        monkeypatch.setattr(ingestion, "process_html_document",
+                            MagicMock(return_value=self._chunk()))
+
+        ingestion.run_ingestion(sources=["senate_bills"], congresses=[16], resume=True)
+
+        data = json.loads(checkpoint_path.read_text())
+        assert "senate_bills:16" in data["completed"]
+
+    def test_fresh_run_does_not_skip_any_step(self, patched_dirs, monkeypatch, tmp_path):
+        checkpoint_path = tmp_path / "cp.json"
+        checkpoint_path.write_text(json.dumps({"completed": ["senate_bills:16"]}))
+        monkeypatch.setattr(ingestion, "CHECKPOINT_FILE", checkpoint_path)
+
+        senate_mock = MagicMock(return_value=[])
+        monkeypatch.setattr(ingestion, "scrape_senate_bills", senate_mock)
+        monkeypatch.setattr(ingestion, "process_html_document", MagicMock(return_value=[]))
+
+        ingestion.run_ingestion(sources=["senate_bills"], congresses=[16], resume=False)
+        senate_mock.assert_called_once()
+
+    def test_resume_skips_completed_flat_source(self, patched_dirs, monkeypatch, tmp_path):
+        checkpoint_path = tmp_path / "cp.json"
+        checkpoint_path.write_text(json.dumps({"completed": ["gazette"]}))
+        monkeypatch.setattr(ingestion, "CHECKPOINT_FILE", checkpoint_path)
+
+        gazette_mock = MagicMock(return_value=[])
+        monkeypatch.setattr(ingestion, "scrape_laws", gazette_mock)
+        monkeypatch.setattr(ingestion, "process_html_document", MagicMock(return_value=[]))
+
+        ingestion.run_ingestion(sources=["gazette"], resume=True)
+        gazette_mock.assert_not_called()
+
+
 class TestRunIngestion:
     @pytest.fixture
     def mock_scrapers(self, monkeypatch):

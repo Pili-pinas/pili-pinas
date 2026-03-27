@@ -37,23 +37,89 @@ _DEFAULT_PROCESSED_DIR = Path(__file__).parents[3] / "data" / "processed"
 PROCESSED_DIR = Path(os.getenv("PROCESSED_DIR", str(_DEFAULT_PROCESSED_DIR)))
 METADATA_FILE = PROCESSED_DIR.parent / "metadata.json"
 FAILED_LOG = PROCESSED_DIR.parent / "failed_urls.log"
+CHECKPOINT_FILE = Path(os.getenv(
+    "BACKFILL_CHECKPOINT",
+    str(Path(__file__).parents[3] / "data" / "backfill_checkpoint.json"),
+))
 
 # Default congress/year values for daily scrape
 _CURRENT_CONGRESS = 20
 _CURRENT_ELECTION_YEAR = 2025
 
 
-def save_documents(docs: list[dict], collection: str) -> Path:
+class BackfillCheckpoint:
+    """
+    Tracks completed backfill steps so interrupted runs can be resumed.
+
+    Steps use the format:
+      "senate_bills:16"  — per-congress bill sources
+      "comelec:2019"     — per-year COMELEC
+      "gazette"          — flat sources (single run per backfill)
+
+    The checkpoint file is written after every completed step so progress
+    is preserved even if the process is killed mid-run.
+    """
+
+    def __init__(self, path: Path, resume: bool = False):
+        self.path = path
+        self._completed: set[str] = set()
+        if resume and path.exists():
+            try:
+                data = json.loads(path.read_text())
+                self._completed = set(data.get("completed", []))
+                logger.info(f"Resuming: {len(self._completed)} steps already done")
+            except Exception as e:
+                logger.warning(f"Could not load checkpoint: {e} — starting fresh")
+        elif not resume and path.exists():
+            path.unlink()
+
+    def is_done(self, step: str) -> bool:
+        return step in self._completed
+
+    def mark_done(self, step: str) -> None:
+        self._completed.add(step)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps({
+            "completed": sorted(self._completed),
+            "last_updated": datetime.now().isoformat(),
+        }, indent=2))
+        logger.info(f"Checkpoint: {step} done")
+
+
+def save_documents(docs: list[dict], collection: str, append: bool = False) -> Path:
     """Save processed document chunks to a JSONL file."""
     out_path = PROCESSED_DIR / f"{collection}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with out_path.open("w", encoding="utf-8") as f:
+    mode = "a" if append else "w"
+    with out_path.open(mode, encoding="utf-8") as f:
         for doc in docs:
             f.write(json.dumps(doc, ensure_ascii=False) + "\n")
 
     logger.info(f"Saved {len(docs)} chunks → {out_path}")
     return out_path
+
+
+def _load_bills_from_jsonl() -> list[dict]:
+    """
+    Load bill docs from saved JSONL files for use when resuming past a completed
+    bills step. Returns a flat list of processed chunks (politician field preserved).
+    """
+    bills = []
+    for collection in ("senate_bills", "house_bills"):
+        path = PROCESSED_DIR / f"{collection}.jsonl"
+        if not path.exists():
+            continue
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        bills.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+    logger.info(f"Loaded {len(bills)} bill docs from JSONL for politician enrichment")
+    return bills
 
 
 def update_metadata(stats: dict) -> None:
@@ -79,6 +145,7 @@ def run_ingestion(
     max_news: int = 20,
     max_laws: int = 50,
     gazette_from_year: int | None = None,
+    resume: bool = False,
 ) -> dict:
     """
     Run the full ingestion pipeline.
@@ -109,12 +176,16 @@ def run_ingestion(
     election_years = election_years or [_CURRENT_ELECTION_YEAR]
     stats = {"sources": sources, "counts": {}}
 
+    checkpoint = BackfillCheckpoint(CHECKPOINT_FILE, resume=resume)
+
     # Collect raw bill docs across all bill scrapers so politician profiles
     # can be enriched with authored-bill history in a single pass.
     _collected_bills: list[dict] = []
+    # Track which JSONL collections have been written this run (for append mode).
+    _written: set[str] = set()
 
     def _process_and_save(raw_docs: list[dict], collection: str) -> int:
-        """Process raw docs into chunks and save."""
+        """Process raw docs into chunks and save (append if collection already written)."""
         chunks = []
         for doc in raw_docs:
             if doc.get("text"):
@@ -122,95 +193,114 @@ def run_ingestion(
             else:
                 logger.warning(f"Skipping doc with no text: {doc.get('title', '')[:50]}")
         if chunks:
-            save_documents(chunks, collection)
+            save_documents(chunks, collection, append=collection in _written)
+            _written.add(collection)
         if raw_docs:
             upsert_documents(raw_docs)
-        stats["counts"][collection] = len(chunks)
+        stats["counts"][collection] = stats["counts"].get(collection, 0) + len(chunks)
         return len(chunks)
 
     if "senate_bills" in sources:
         logger.info(f"=== Senate Bills (congresses={congresses}) ===")
-        all_docs = []
         for c in congresses:
+            step = f"senate_bills:{c}"
+            if checkpoint.is_done(step):
+                logger.info(f"Skipping {step} (already completed)")
+                continue
             logger.info(f"Scraping Senate bills — Congress {c}")
-            all_docs.extend(scrape_senate_bills(congress=c, max_items=max_pages))
-        _process_and_save(all_docs, "senate_bills")
-        _collected_bills.extend(all_docs)
+            docs = scrape_senate_bills(congress=c, max_items=max_pages)
+            _process_and_save(docs, "senate_bills")
+            _collected_bills.extend(docs)
+            checkpoint.mark_done(step)
 
     if "senators" in sources:
         if "politicians" in sources:
             logger.info("=== Senator Profiles — skipped (covered by politicians) ===")
-        else:
+        elif not checkpoint.is_done("senators"):
             logger.info("=== Senator Profiles ===")
             docs = scrape_senators()
             _process_and_save(docs, "senators")
+            checkpoint.mark_done("senators")
+        else:
+            logger.info("Skipping senators (already completed)")
 
     if "gazette" in sources:
-        logger.info(f"=== Official Gazette Laws (max_laws={max_laws}, from_year={gazette_from_year}) ===")
-        docs = scrape_laws(max_items=max_laws, from_year=gazette_from_year)
-        _process_and_save(docs, "gazette_laws")
+        if not checkpoint.is_done("gazette"):
+            logger.info(f"=== Official Gazette Laws (max_laws={max_laws}, from_year={gazette_from_year}) ===")
+            docs = scrape_laws(max_items=max_laws, from_year=gazette_from_year)
+            _process_and_save(docs, "gazette_laws")
+            checkpoint.mark_done("gazette")
+        else:
+            logger.info("Skipping gazette (already completed)")
 
     if "house_bills" in sources:
         logger.info(f"=== House Bills (congresses={congresses}) ===")
-        all_docs = []
         for c in congresses:
+            step = f"house_bills:{c}"
+            if checkpoint.is_done(step):
+                logger.info(f"Skipping {step} (already completed)")
+                continue
             logger.info(f"Scraping House bills — Congress {c}")
-            all_docs.extend(scrape_house_bills(congress=c, max_items=max_pages))
-        _process_and_save(all_docs, "house_bills")
-        _collected_bills.extend(all_docs)
+            docs = scrape_house_bills(congress=c, max_items=max_pages)
+            _process_and_save(docs, "house_bills")
+            _collected_bills.extend(docs)
+            checkpoint.mark_done(step)
 
     if "house_members" in sources:
         if "politicians" in sources:
             logger.info("=== House Members — skipped (covered by politicians) ===")
-        else:
+        elif not checkpoint.is_done("house_members"):
             logger.info("=== House Members ===")
             docs = scrape_members()
             _process_and_save(docs, "house_members")
+            checkpoint.mark_done("house_members")
+        else:
+            logger.info("Skipping house_members (already completed)")
 
     if "comelec" in sources:
         logger.info(f"=== COMELEC (election_years={election_years}) ===")
-        all_docs = []
         for year in election_years:
+            step = f"comelec:{year}"
+            if checkpoint.is_done(step):
+                logger.info(f"Skipping {step} (already completed)")
+                continue
             logger.info(f"Scraping COMELEC — {year}")
-            all_docs.extend(scrape_all_comelec(election_year=year, max_resolutions=30))
-        if all_docs:
-            save_documents(all_docs, "comelec")
-        stats["counts"]["comelec"] = len(all_docs)
+            docs = scrape_all_comelec(election_year=year, max_resolutions=30)
+            if docs:
+                save_documents(docs, "comelec", append="comelec" in _written)
+                _written.add("comelec")
+            stats["counts"]["comelec"] = stats["counts"].get("comelec", 0) + len(docs)
+            checkpoint.mark_done(step)
 
-    if "news" in sources:
-        logger.info("=== News Articles ===")
-        docs = scrape_all_news(max_items_per_source=max_news)
-        _process_and_save(docs, "news_articles")
-
-    if "fact_check" in sources:
-        logger.info("=== Fact Checks ===")
-        docs = scrape_all_fact_checks(max_items=max_news)
-        _process_and_save(docs, "fact_checks")
-
-    if "oversight" in sources:
-        logger.info("=== Oversight Bodies ===")
-        docs = scrape_all_oversight(max_items=max_news)
-        _process_and_save(docs, "oversight")
-
-    if "statistics" in sources:
-        logger.info("=== Government Statistics ===")
-        docs = scrape_all_statistics(max_items=max_news)
-        _process_and_save(docs, "statistics")
-
-    if "research" in sources:
-        logger.info("=== Research Publications ===")
-        docs = scrape_all_research(max_items=max_news)
-        _process_and_save(docs, "research")
-
-    if "financial" in sources:
-        logger.info("=== Financial Transparency ===")
-        docs = scrape_all_financial(max_items=max_news)
-        _process_and_save(docs, "financial")
+    for source, collection, scrape_fn, fn_kwargs in [
+        ("news",       "news_articles", lambda: scrape_all_news(max_items_per_source=max_news), {}),
+        ("fact_check", "fact_checks",   lambda: scrape_all_fact_checks(max_items=max_news), {}),
+        ("oversight",  "oversight",     lambda: scrape_all_oversight(max_items=max_news), {}),
+        ("statistics", "statistics",    lambda: scrape_all_statistics(max_items=max_news), {}),
+        ("research",   "research",      lambda: scrape_all_research(max_items=max_news), {}),
+        ("financial",  "financial",     lambda: scrape_all_financial(max_items=max_news), {}),
+    ]:
+        if source not in sources:
+            continue
+        if checkpoint.is_done(source):
+            logger.info(f"Skipping {source} (already completed)")
+            continue
+        logger.info(f"=== {source.replace('_', ' ').title()} ===")
+        docs = scrape_fn()
+        _process_and_save(docs, collection)
+        checkpoint.mark_done(source)
 
     if "politicians" in sources:
-        logger.info(f"=== Politician Profiles (bills available: {len(_collected_bills)}) ===")
-        docs = scrape_all_politicians(bills=_collected_bills)
-        _process_and_save(docs, "politicians")
+        if not checkpoint.is_done("politicians"):
+            # If all bill steps were skipped on resume, load from saved JSONL
+            if not _collected_bills:
+                _collected_bills = _load_bills_from_jsonl()
+            logger.info(f"=== Politician Profiles (bills available: {len(_collected_bills)}) ===")
+            docs = scrape_all_politicians(bills=_collected_bills)
+            _process_and_save(docs, "politicians")
+            checkpoint.mark_done("politicians")
+        else:
+            logger.info("Skipping politicians (already completed)")
 
     total = sum(stats["counts"].values())
     stats["total_chunks"] = total
@@ -247,6 +337,8 @@ if __name__ == "__main__":
     parser.add_argument("--max-laws", type=int, default=50)
     parser.add_argument("--gazette-from-year", type=int, default=None,
                         help="Stop gazette scraping at laws older than this year (e.g. 2006)")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from last checkpoint instead of starting fresh")
     args = parser.parse_args()
 
     stats = run_ingestion(
@@ -257,5 +349,6 @@ if __name__ == "__main__":
         max_news=args.max_news,
         max_laws=args.max_laws,
         gazette_from_year=args.gazette_from_year,
+        resume=args.resume,
     )
     print(f"\nDone. Total chunks: {stats['total_chunks']}")
