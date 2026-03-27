@@ -45,6 +45,14 @@ if [[ -f "$SEEN_URLS" ]]; then
 fi
 
 echo ""
+RESUME_FLAG=""
+if [[ "${RESUME:-0}" == "1" ]]; then
+  RESUME_FLAG="--resume"
+  echo "Mode: RESUME (skipping completed steps)"
+else
+  echo "Mode: FRESH (starting from scratch)"
+fi
+
 echo "--- Step 1/2: Ingestion ---"
 uv run --project "$BACKEND" python backend/src/data_ingestion/ingestion.py \
   --sources senate_bills senators gazette house_bills house_members comelec \
@@ -54,7 +62,8 @@ uv run --project "$BACKEND" python backend/src/data_ingestion/ingestion.py \
   --max-pages 2000 \
   --max-news 200 \
   --max-laws "$MAX_LAWS" \
-  --gazette-from-year 2006
+  --gazette-from-year 2006 \
+  $RESUME_FLAG
 
 echo ""
 echo "--- Step 2/2: Embeddings (GPU batch_size=$BATCH_SIZE) ---"
