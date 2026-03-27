@@ -66,7 +66,11 @@ def scrape_house_bills(congress: int = 19, max_items: int = 100) -> list[dict]:
     cursor: Optional[str] = None
     page_size = min(50, max_items)
     pages_fetched = 0
-    max_pages = max(max_items, 10)  # cap pages fetched to avoid infinite scan of null-title records
+    # Allow 5× the minimum pages needed to reach max_items, plus a small buffer.
+    # This handles sparse HB data (many null-title records) without burning through
+    # thousands of pages when max_items is large.
+    pages_needed = max(max_items // page_size, 1)
+    max_pages = pages_needed * 5 + 10
 
     while len(documents) < max_items and pages_fetched < max_pages:
         params: dict = {"type": "HB", "congress": congress, "limit": page_size}

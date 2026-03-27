@@ -266,6 +266,25 @@ class TestScrapeHouseBills:
         assert docs == []
         assert call_count < 20  # must stop well before exhausting the full dataset
 
+    def test_page_cap_does_not_scale_linearly_with_max_items(self):
+        """max_items=2000 must not cause 2000 page fetches through null-title records."""
+        null_page = {
+            "success": True,
+            "data": [{**SAMPLE_HB, "title": None}] * 50,
+            "pagination": {"total": 99999, "limit": 50, "has_more": True, "next_cursor": "next"},
+        }
+        call_count = 0
+
+        def fake_get(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return _mock_response(null_page)
+
+        with patch("data_ingestion.scrapers.congress._get", side_effect=fake_get):
+            scrape_house_bills(congress=20, max_items=2000)
+
+        assert call_count < 300  # must be far less than 2000
+
     def test_documents_have_required_fields(self):
         resp = _mock_response({**BETTERGOV_PAGE_1,
                                 "pagination": {**BETTERGOV_PAGE_1["pagination"], "has_more": False}})
