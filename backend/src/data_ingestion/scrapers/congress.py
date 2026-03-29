@@ -203,7 +203,10 @@ def _fetch_all_people() -> list[dict]:
         pagination = payload.get("pagination", {})
         if not pagination.get("has_more"):
             break
-        cursor = pagination.get("next_cursor")
+        next_cursor = pagination.get("next_cursor")
+        if not next_cursor:
+            break  # has_more but no cursor — can't advance, stop to avoid infinite loop
+        cursor = next_cursor
     logger.info(f"Finished fetching people: {len(people)} records total")
     return people
 
