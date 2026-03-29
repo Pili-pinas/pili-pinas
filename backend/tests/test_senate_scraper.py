@@ -308,3 +308,17 @@ class TestScrapeSenators:
             # BETTERGOV_SENATOR served in 18th and 19th; filter to only 20th → excluded
             docs = scrape_senators(congresses=[20])
         assert docs == []
+
+    def test_stops_pagination_when_has_more_true_but_no_cursor(self):
+        """has_more=True with next_cursor=None must not cause an infinite loop."""
+        page = {
+            "success": True,
+            "data": [BETTERGOV_SENATOR],
+            "pagination": {"has_more": True, "next_cursor": None},
+        }
+        resp = _mock_response(page)
+        with patch("data_ingestion.scrapers.senate._get", return_value=resp) as mock_get:
+            docs = scrape_senators()
+        # Should fetch exactly once and stop — not loop forever
+        assert mock_get.call_count == 1
+        assert len(docs) >= 0  # whatever was in that page

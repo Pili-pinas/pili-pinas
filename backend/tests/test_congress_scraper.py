@@ -369,3 +369,16 @@ class TestScrapeMembers:
             # BETTERGOV_REP served in 19th; filter to only 20th → excluded
             docs = scrape_members(congresses=[20])
         assert docs == []
+
+    def test_stops_pagination_when_has_more_true_but_no_cursor(self):
+        """has_more=True with next_cursor=None must not cause an infinite loop."""
+        page = {
+            "success": True,
+            "data": [BETTERGOV_REP],
+            "pagination": {"has_more": True, "next_cursor": None},
+        }
+        resp = _mock_response(page)
+        with patch("data_ingestion.scrapers.congress._get", return_value=resp) as mock_get:
+            docs = scrape_members()
+        assert mock_get.call_count == 1
+        assert len(docs) >= 0
