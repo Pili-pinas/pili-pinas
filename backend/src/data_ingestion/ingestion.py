@@ -86,9 +86,22 @@ class BackfillCheckpoint:
         logger.info(f"Checkpoint: {step} done")
 
 
-def save_documents(docs: list[dict], collection: str, append: bool = False) -> Path:
-    """Save processed document chunks to a JSONL file."""
-    out_path = PROCESSED_DIR / f"{collection}.jsonl"
+def save_documents(
+    docs: list[dict],
+    collection: str,
+    append: bool = False,
+    out_dir: Path | None = None,
+) -> Path:
+    """Save processed document chunks to a JSONL file.
+
+    Args:
+        docs: Document chunks to write.
+        collection: Base name for the output file (e.g. ``"senate_bills"``).
+        append: If True, append to an existing file instead of overwriting.
+        out_dir: Directory to write to.  Defaults to ``PROCESSED_DIR``.
+    """
+    dir_ = out_dir if out_dir is not None else PROCESSED_DIR
+    out_path = dir_ / f"{collection}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     mode = "a" if append else "w"
@@ -98,6 +111,20 @@ def save_documents(docs: list[dict], collection: str, append: bool = False) -> P
 
     logger.info(f"Saved {len(docs)} chunks → {out_path}")
     return out_path
+
+
+def _swap_staging_to_live(staging_dir: Path, live_dir: Path) -> None:
+    """Atomically move all JSONL files from *staging_dir* into *live_dir*.
+
+    Uses :py:meth:`Path.replace` which is atomic on the same filesystem.
+    Any existing live file with the same name is overwritten.
+    """
+    live_dir.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for staged in staging_dir.glob("*.jsonl"):
+        staged.replace(live_dir / staged.name)
+        moved += 1
+    logger.info(f"Swapped {moved} JSONL file(s) from staging → {live_dir}")
 
 
 def _load_bills_from_jsonl() -> list[dict]:
@@ -146,6 +173,7 @@ def run_ingestion(
     max_laws: int = 50,
     gazette_from_year: int | None = None,
     resume: bool = False,
+    staging: bool = False,
 ) -> dict:
     """
     Run the full ingestion pipeline.
@@ -178,6 +206,13 @@ def run_ingestion(
 
     checkpoint = BackfillCheckpoint(CHECKPOINT_FILE, resume=resume)
 
+    # When staging=True all writes go to a temporary subdirectory.
+    # On successful completion the files are atomically moved to PROCESSED_DIR.
+    out_dir = PROCESSED_DIR / "staging" if staging else PROCESSED_DIR
+    if staging:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Staging mode: writing to {out_dir}")
+
     # Collect raw bill docs across all bill scrapers so politician profiles
     # can be enriched with authored-bill history in a single pass.
     _collected_bills: list[dict] = []
@@ -193,7 +228,7 @@ def run_ingestion(
             else:
                 logger.warning(f"Skipping doc with no text: {doc.get('title', '')[:50]}")
         if chunks:
-            save_documents(chunks, collection, append=collection in _written)
+            save_documents(chunks, collection, append=collection in _written, out_dir=out_dir)
             _written.add(collection)
         if raw_docs:
             upsert_documents(raw_docs)
@@ -267,7 +302,7 @@ def run_ingestion(
             logger.info(f"Scraping COMELEC — {year}")
             docs = scrape_all_comelec(election_year=year, max_resolutions=30)
             if docs:
-                save_documents(docs, "comelec", append="comelec" in _written)
+                save_documents(docs, "comelec", append="comelec" in _written, out_dir=out_dir)
                 _written.add("comelec")
             stats["counts"]["comelec"] = stats["counts"].get("comelec", 0) + len(docs)
             checkpoint.mark_done(step)
@@ -310,6 +345,9 @@ def run_ingestion(
     for collection, count in stats["counts"].items():
         logger.info(f"  {collection}: {count} chunks")
 
+    if staging:
+        _swap_staging_to_live(out_dir, PROCESSED_DIR)
+
     return stats
 
 
@@ -339,6 +377,8 @@ if __name__ == "__main__":
                         help="Stop gazette scraping at laws older than this year (e.g. 2006)")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from last checkpoint instead of starting fresh")
+    parser.add_argument("--staging", action="store_true",
+                        help="Write to a staging dir and swap to live only on success")
     args = parser.parse_args()
 
     stats = run_ingestion(
@@ -350,5 +390,6 @@ if __name__ == "__main__":
         max_laws=args.max_laws,
         gazette_from_year=args.gazette_from_year,
         resume=args.resume,
+        staging=args.staging,
     )
     print(f"\nDone. Total chunks: {stats['total_chunks']}")

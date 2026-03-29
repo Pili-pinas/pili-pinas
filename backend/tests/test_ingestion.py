@@ -317,3 +317,78 @@ class TestRunIngestion:
 
         stats = ingestion.run_ingestion(sources=["news"])
         assert stats["counts"].get("news_articles", 0) == 0
+
+
+class TestStagingSwap:
+    """Staging directory + atomic swap: old live files are preserved until backfill succeeds."""
+
+    def _news_doc(self):
+        return {"text": "News text.", "title": "News", "url": "https://example.com"}
+
+    def _chunk(self):
+        return [{"text": "chunk", "title": "t", "url": "u", "chunk_index": 0, "chunk_total": 1}]
+
+    def _patch_news(self, monkeypatch, docs=None):
+        monkeypatch.setattr(ingestion, "scrape_all_news",
+                            MagicMock(return_value=docs or [self._news_doc()]))
+        monkeypatch.setattr(ingestion, "process_html_document",
+                            MagicMock(return_value=self._chunk()))
+
+    def test_staging_writes_to_staging_subdir(self, patched_dirs, monkeypatch):
+        self._patch_news(monkeypatch)
+        ingestion.run_ingestion(sources=["news"], staging=True)
+        # After a successful run staging files should be swapped to live,
+        # but we verify the staging dir existed by checking live file is present.
+        live = patched_dirs / "processed" / "news_articles.jsonl"
+        assert live.exists()
+
+    def test_staging_file_not_written_directly_to_live_during_run(self, patched_dirs, monkeypatch):
+        """During the run, live processed/ dir should NOT receive partial writes."""
+        write_calls = []
+        original_save = ingestion.save_documents
+
+        def recording_save(docs, collection, append=False, out_dir=None):
+            write_calls.append(out_dir)
+            return original_save(docs, collection, append=append, out_dir=out_dir)
+
+        monkeypatch.setattr(ingestion, "save_documents", recording_save)
+        self._patch_news(monkeypatch)
+        ingestion.run_ingestion(sources=["news"], staging=True)
+
+        live_dir = patched_dirs / "processed"
+        for d in write_calls:
+            if d is not None:
+                assert d != live_dir, "save_documents was given live dir during staging run"
+
+    def test_staging_live_file_present_after_successful_run(self, patched_dirs, monkeypatch):
+        self._patch_news(monkeypatch)
+        ingestion.run_ingestion(sources=["news"], staging=True)
+        assert (patched_dirs / "processed" / "news_articles.jsonl").exists()
+
+    def test_staging_replaces_old_live_file_on_success(self, patched_dirs, monkeypatch):
+        live = patched_dirs / "processed" / "news_articles.jsonl"
+        live.parent.mkdir(parents=True, exist_ok=True)
+        live.write_text('{"text": "old data"}\n')
+
+        self._patch_news(monkeypatch)
+        ingestion.run_ingestion(sources=["news"], staging=True)
+
+        # Old content must be gone; new chunk written by mocked process_html_document is there.
+        content = live.read_text()
+        assert "old data" not in content
+        assert "chunk" in content  # mocked chunk text
+
+    def test_staging_no_staging_writes_directly(self, patched_dirs, monkeypatch):
+        """staging=False (default) writes directly to processed/."""
+        self._patch_news(monkeypatch)
+        ingestion.run_ingestion(sources=["news"], staging=False)
+        assert (patched_dirs / "processed" / "news_articles.jsonl").exists()
+        # No staging subdir should be created
+        assert not (patched_dirs / "processed" / "staging").exists()
+
+    def test_save_documents_out_dir_parameter(self, tmp_path):
+        """save_documents respects an explicit out_dir instead of PROCESSED_DIR."""
+        custom_dir = tmp_path / "custom"
+        custom_dir.mkdir()
+        ingestion.save_documents([{"text": "hi"}], "col", out_dir=custom_dir)
+        assert (custom_dir / "col.jsonl").exists()

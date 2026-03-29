@@ -63,6 +63,7 @@ uv run --project "$BACKEND" python backend/src/data_ingestion/ingestion.py \
   --max-news 200 \
   --max-laws "$MAX_LAWS" \
   --gazette-from-year 2006 \
+  --staging \
   $RESUME_FLAG
 
 echo ""
