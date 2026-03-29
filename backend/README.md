@@ -25,18 +25,29 @@ cp ../.env.example ../.env
 # From repo root
 ./scripts/scrape.sh           # default: 30 news articles
 ./scripts/scrape.sh 50        # custom max news
+
+./scripts/scrape_gpu.sh       # same, but uses MPS/CUDA for the embedding step
 ```
 
-### Historical backfill (all sources, Congress 17–20, elections 2016–2025)
+### Historical backfill (all sources, Congress 13–20, elections 2007–2025)
 
-Run once to populate the full dataset. Skips news since RSS feeds have no historical archive.
+Run once to populate the full dataset. Covers 20 years of bills, laws, COMELEC, oversight, statistics, research, financial, and enriched politician profiles.
 
 ```bash
 ./scripts/backfill.sh         # default: 1000 laws
 ./scripts/backfill.sh 12500   # all 12,500+ Republic Acts
+
+./scripts/backfill_gpu.sh     # same, with GPU-accelerated embeddings (MPS/CUDA)
 ```
 
-Both scripts run **ingestion → embeddings** in one shot using `uv`.
+Both scripts run **ingestion → embeddings** in one shot and write new data to a staging directory, swapping it into `data/processed/` only on success — so a failed run never corrupts the existing dataset.
+
+**Resume an interrupted backfill** (skips already-completed congresses/sources):
+
+```bash
+RESUME=1 ./scripts/backfill.sh
+RESUME=1 ./scripts/backfill_gpu.sh
+```
 
 You can also trigger a backfill remotely via GitHub Actions:
 **Actions → Historical backfill → Run workflow**.
@@ -45,6 +56,22 @@ You can also trigger a backfill remotely via GitHub Actions:
 
 ```bash
 uvicorn src.api.main:app --reload
+```
+
+## Utility scripts
+
+```bash
+# How many vectors are in ChromaDB?
+python backend/scripts/vector_count.py
+
+# Which politicians have a profile?
+python backend/scripts/list_politicians.py
+python backend/scripts/list_politicians.py --search robredo
+python backend/scripts/list_politicians.py --source chromadb
+
+# Scrape and filter by keyword
+python backend/scripts/scrape_keyword.py "Leni Robredo"
+python backend/scripts/scrape_keyword.py "Leni Robredo" --dry-run
 ```
 
 ## Endpoints

@@ -165,14 +165,16 @@ def scrape_senators(congresses: Optional[list] = None) -> list[dict]:
 
 
 def _fetch_all_people() -> list[dict]:
-    """Paginate through all BetterGov people records."""
+    """Paginate through all BetterGov people records.
+
+    The /api/people endpoint uses offset-based pagination — the ``cursor``
+    param is silently ignored; only ``offset`` advances the page.
+    """
     people = []
-    cursor = None
     page = 0
+    page_size = 100
     while True:
-        params: dict = {"limit": 100}
-        if cursor:
-            params["cursor"] = cursor
+        params: dict = {"limit": page_size, "offset": len(people)}
         resp = _get(BETTERGOV_PEOPLE_URL, params=params)
         if resp is None:
             break
@@ -186,13 +188,8 @@ def _fetch_all_people() -> list[dict]:
         people.extend(batch)
         page += 1
         logger.info(f"Fetched people page {page} ({len(people)} total so far)")
-        pagination = payload.get("pagination", {})
-        if not pagination.get("has_more"):
+        if not payload.get("pagination", {}).get("has_more"):
             break
-        next_cursor = pagination.get("next_cursor")
-        if not next_cursor:
-            break  # has_more but no cursor — can't advance, stop to avoid infinite loop
-        cursor = next_cursor
     logger.info(f"Finished fetching people: {len(people)} records total")
     return people
 

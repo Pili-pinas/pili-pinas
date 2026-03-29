@@ -289,12 +289,12 @@ class TestScrapeSenators:
         page1 = {
             "success": True,
             "data": [BETTERGOV_SENATOR],
-            "pagination": {"has_more": True, "next_cursor": "cursor-2"},
+            "pagination": {"has_more": True},
         }
         page2 = {
             "success": True,
             "data": [BETTERGOV_SENATOR_2],
-            "pagination": {"has_more": False, "next_cursor": None},
+            "pagination": {"has_more": False},
         }
         resp1 = _mock_response(page1)
         resp2 = _mock_response(page2)
@@ -302,23 +302,40 @@ class TestScrapeSenators:
             docs = scrape_senators()
         assert len(docs) == 2
 
+    def test_pagination_uses_offset_not_cursor(self):
+        """_fetch_all_people must use offset= param, not cursor=, to advance pages."""
+        page1 = {
+            "success": True,
+            "data": [BETTERGOV_SENATOR],
+            "pagination": {"has_more": True},
+        }
+        page2 = {
+            "success": True,
+            "data": [BETTERGOV_SENATOR_2],
+            "pagination": {"has_more": False},
+        }
+        resp1 = _mock_response(page1)
+        resp2 = _mock_response(page2)
+        with patch("data_ingestion.scrapers.senate._get", side_effect=[resp1, resp2]) as mock_get:
+            scrape_senators()
+        # Second call must pass offset=1 (size of previous batch), not a cursor key
+        _, kwargs = mock_get.call_args_list[1]
+        params = kwargs.get("params") or mock_get.call_args_list[1][0][1]
+        assert "offset" in params
+        assert "cursor" not in params
+
+    def test_stops_when_empty_batch_returned(self):
+        """Pagination stops when the API returns an empty data list."""
+        page1 = {"success": True, "data": [BETTERGOV_SENATOR], "pagination": {"has_more": True}}
+        page2 = {"success": True, "data": [], "pagination": {"has_more": True}}
+        with patch("data_ingestion.scrapers.senate._get",
+                   side_effect=[_mock_response(page1), _mock_response(page2)]) as mock_get:
+            scrape_senators()
+        assert mock_get.call_count == 2  # stopped after empty batch, not infinite
+
     def test_filters_by_congress(self):
         resp = _mock_response(PEOPLE_PAGE_1)
         with patch("data_ingestion.scrapers.senate._get", return_value=resp):
             # BETTERGOV_SENATOR served in 18th and 19th; filter to only 20th → excluded
             docs = scrape_senators(congresses=[20])
         assert docs == []
-
-    def test_stops_pagination_when_has_more_true_but_no_cursor(self):
-        """has_more=True with next_cursor=None must not cause an infinite loop."""
-        page = {
-            "success": True,
-            "data": [BETTERGOV_SENATOR],
-            "pagination": {"has_more": True, "next_cursor": None},
-        }
-        resp = _mock_response(page)
-        with patch("data_ingestion.scrapers.senate._get", return_value=resp) as mock_get:
-            docs = scrape_senators()
-        # Should fetch exactly once and stop — not loop forever
-        assert mock_get.call_count == 1
-        assert len(docs) >= 0  # whatever was in that page
