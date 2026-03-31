@@ -54,23 +54,21 @@ def _bills_for_person(person: dict, bills: list[dict]) -> list[dict]:
 def _build_enriched_profile(person: dict, bills: list[dict]) -> dict:
     full_name = _build_full_name(person)
 
-    congresses_served = person.get("congresses_served") or []
-    role_parts = []
-    for c in congresses_served:
-        pos = c.get("position", "")
-        ordinal = c.get("congress_ordinal", "")
-        if pos and ordinal:
-            role_parts.append(f"{pos} ({ordinal} Congress)")
-
     text_parts = [f"{full_name}."]
-    if role_parts:
-        text_parts.append("Roles: " + "; ".join(role_parts) + ".")
+
+    # congresses_served is no longer returned by the BetterGov API (always null).
+    # Infer congress service from authored bills instead.
+    authored = _bills_for_person(person, bills)
+    congress_nums = sorted({b["congress"] for b in authored if b.get("congress")})
+    if congress_nums:
+        text_parts.append(
+            "Served in Congress: " + ", ".join(str(c) for c in congress_nums) + "."
+        )
 
     aliases = [a for a in (person.get("aliases") or []) if a]
     if aliases:
         text_parts.append(f"Also known as: {', '.join(aliases)}.")
 
-    authored = _bills_for_person(person, bills)
     if authored:
         titles = [b["title"] for b in authored[:20]]
         text_parts.append("Bills authored: " + "; ".join(titles) + ".")
@@ -103,8 +101,8 @@ def scrape_all_politicians(bills: list[dict] | None = None) -> list[dict]:
     docs = []
 
     for person in people:
-        if not person.get("congresses_served"):
-            continue
+        if not _build_full_name(person):
+            continue  # skip records with no usable name
         doc = _build_enriched_profile(person, bills)
         docs.append(doc)
         logger.info(f"Built profile: {doc['politician']}")

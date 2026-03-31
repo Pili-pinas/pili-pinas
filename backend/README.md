@@ -96,19 +96,36 @@ curl -X POST http://localhost:8000/query \
 backend/
 ├── src/
 │   ├── data_ingestion/
-│   │   ├── scrapers/       # One scraper per source
-│   │   ├── processors/     # HTML + PDF text extraction
-│   │   └── ingestion.py    # Main pipeline orchestrator
+│   │   ├── scrapers/
+│   │   │   ├── senate.py          # Senate bills + senator profiles (BetterGov API)
+│   │   │   ├── congress.py        # House bills + member profiles (BetterGov API)
+│   │   │   ├── official_gazette.py# Republic Acts (SC E-Library)
+│   │   │   ├── comelec.py         # Election results + candidates
+│   │   │   ├── news_sites.py      # RSS news (Rappler, Inquirer, etc.)
+│   │   │   ├── fact_check.py      # Vera Files, Tsek.ph
+│   │   │   ├── oversight.py       # COA, Ombudsman, Sandiganbayan, CSC
+│   │   │   ├── statistics.py      # PSA, BSP, DBM, NEDA, World Bank
+│   │   │   ├── research.py        # PIDS, ADB, UNDP, IMF, TI, UP CIDS
+│   │   │   ├── financial.py       # PhilGEPS procurement, SOCE campaign finance
+│   │   │   └── politicians.py     # Enriched profiles (roles + authored bills)
+│   │   ├── processors/            # HTML + PDF text extraction
+│   │   └── ingestion.py           # Main pipeline orchestrator
 │   ├── embeddings/
 │   │   ├── create_embeddings.py   # Embed chunks → ChromaDB
+│   │   ├── model.py               # Sentence-transformer singleton (CUDA/MPS/CPU)
 │   │   └── vector_store.py        # ChromaDB wrapper
 │   ├── retrieval/
-│   │   ├── rag_chain.py    # RAG query logic
-│   │   └── prompts.py      # System + user prompts
+│   │   ├── rag_chain.py           # RAG query logic
+│   │   └── prompts.py             # System + user prompts
 │   └── api/
-│       └── main.py         # FastAPI app
+│       └── main.py                # FastAPI app
+├── scripts/
+│   ├── vector_count.py            # Print current ChromaDB vector count
+│   ├── list_politicians.py        # List politicians with profiles
+│   └── scrape_keyword.py          # Scrape and filter by keyword
 ├── data/
-│   ├── raw/                # Original HTML/PDFs (gitignored)
-│   └── processed/          # JSONL chunks (gitignored)
-└── vector_db/              # ChromaDB files (gitignored)
+│   ├── raw/                       # Original HTML/PDFs (gitignored)
+│   └── processed/                 # JSONL chunks (gitignored)
+│       └── staging/               # Temp dir during backfill (auto-swapped on success)
+└── vector_db/                     # ChromaDB files (gitignored)
 ```

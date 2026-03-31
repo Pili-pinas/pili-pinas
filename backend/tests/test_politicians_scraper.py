@@ -26,10 +26,7 @@ LENI = {
     "name_prefix": None,
     "name_suffix": None,
     "aliases": ["Leni"],
-    "congresses_served": [
-        {"congress_number": 15, "congress_ordinal": "15th", "position": "Representative"},
-        {"congress_number": 16, "congress_ordinal": "16th", "position": "Representative"},
-    ],
+    "congresses_served": None,  # API no longer returns this field
 }
 
 RISA = {
@@ -40,10 +37,7 @@ RISA = {
     "name_prefix": None,
     "name_suffix": None,
     "aliases": ["Risa"],
-    "congresses_served": [
-        {"congress_number": 18, "congress_ordinal": "18th", "position": "Senator"},
-        {"congress_number": 19, "congress_ordinal": "19th", "position": "Senator"},
-    ],
+    "congresses_served": None,
 }
 
 PERSON_WITH_PREFIX = {
@@ -54,20 +48,18 @@ PERSON_WITH_PREFIX = {
     "name_prefix": "Hon.",
     "name_suffix": "Jr.",
     "aliases": [],
-    "congresses_served": [
-        {"congress_number": 19, "congress_ordinal": "19th", "position": "Representative"},
-    ],
+    "congresses_served": None,
 }
 
-PERSON_NO_CONGRESSES = {
-    "id": "person-nocong",
-    "first_name": "Unknown",
+PERSON_NO_NAME = {
+    "id": "person-noname",
+    "first_name": "",
     "middle_name": "",
-    "last_name": "Person",
+    "last_name": "",
     "name_prefix": None,
     "name_suffix": None,
     "aliases": [],
-    "congresses_served": [],
+    "congresses_served": None,
 }
 
 
@@ -181,14 +173,14 @@ class TestBuildEnrichedProfile:
         doc = _build_enriched_profile(LENI, [])
         assert "Robredo" in doc["title"]
 
-    def test_text_includes_congresses_served(self):
+    def test_text_still_built_when_congresses_served_is_null(self):
         doc = _build_enriched_profile(LENI, [])
-        assert "15th" in doc["text"]
-        assert "16th" in doc["text"]
+        # congresses_served is None — profile should still be built with name + aliases
+        assert "Robredo" in doc["text"]
 
-    def test_text_includes_position(self):
+    def test_no_roles_section_when_congresses_served_null(self):
         doc = _build_enriched_profile(LENI, [])
-        assert "Representative" in doc["text"]
+        assert "Roles:" not in doc["text"]
 
     def test_text_includes_alias(self):
         doc = _build_enriched_profile(LENI, [])
@@ -229,15 +221,23 @@ class TestBuildEnrichedProfile:
 # ---------------------------------------------------------------------------
 
 class TestScrapeAllPoliticians:
-    def test_returns_profile_for_each_person_with_congresses(self):
+    def test_returns_profile_for_each_person(self):
         with patch("data_ingestion.scrapers.politicians._fetch_all_people",
                    return_value=[LENI, RISA]):
             docs = scrape_all_politicians(bills=[])
         assert len(docs) == 2
 
-    def test_skips_person_with_no_congresses_served(self):
+    def test_builds_profile_when_congresses_served_is_null(self):
+        """API no longer returns congresses_served — profiles must still be built."""
         with patch("data_ingestion.scrapers.politicians._fetch_all_people",
-                   return_value=[LENI, PERSON_NO_CONGRESSES]):
+                   return_value=[LENI]):
+            docs = scrape_all_politicians(bills=[])
+        assert len(docs) == 1
+        assert "Robredo" in docs[0]["politician"]
+
+    def test_skips_person_with_no_name(self):
+        with patch("data_ingestion.scrapers.politicians._fetch_all_people",
+                   return_value=[LENI, PERSON_NO_NAME]):
             docs = scrape_all_politicians(bills=[])
         assert len(docs) == 1
         assert "Robredo" in docs[0]["politician"]
