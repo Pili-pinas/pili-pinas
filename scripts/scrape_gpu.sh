@@ -26,7 +26,7 @@ export EMBEDDING_DEVICE="${EMBEDDING_DEVICE:-auto}"
 BATCH_SIZE="${EMBED_BATCH_SIZE:-256}"
 
 echo "=== Pili-Pinas Daily Scrape (GPU) ==="
-echo "Sources  : news senate_bills senators fact_check oversight statistics financial"
+echo "Sources  : news senate_bills house_bills fact_check oversight statistics financial politicians"
 echo "Max news : $MAX_NEWS"
 echo "GPU device: $EMBEDDING_DEVICE"
 echo "Batch size: $BATCH_SIZE"
@@ -34,7 +34,7 @@ echo ""
 
 echo "--- Step 1/2: Ingestion ---"
 uv run --project "$BACKEND" python backend/src/data_ingestion/ingestion.py \
-  --sources news senate_bills senators fact_check oversight statistics financial \
+  --sources news senate_bills house_bills fact_check oversight statistics financial politicians \
   --max-news "$MAX_NEWS"
 
 echo ""

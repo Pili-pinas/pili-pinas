@@ -17,13 +17,13 @@ cd "$REPO_ROOT"
 MAX_NEWS="${1:-30}"
 
 echo "=== Pili-Pinas Daily Scrape ==="
-echo "Sources  : news senate_bills senators fact_check oversight statistics financial"
+echo "Sources  : news senate_bills house_bills fact_check oversight statistics financial politicians"
 echo "Max news : $MAX_NEWS"
 echo ""
 
 echo "--- Step 1/2: Ingestion ---"
 uv run --project "$BACKEND" python backend/src/data_ingestion/ingestion.py \
-  --sources news senate_bills senators fact_check oversight statistics financial \
+  --sources news senate_bills house_bills fact_check oversight statistics financial politicians \
   --max-news "$MAX_NEWS"
 
 echo ""
